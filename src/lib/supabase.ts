@@ -3,7 +3,16 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 const STORAGE_URL_KEY = 'mdtu_supabase_url';
 const STORAGE_ANON_KEY = 'mdtu_supabase_anon_key';
 
-export type SupabaseConfigSource = 'env' | 'server' | 'localStorage' | 'unconfigured';
+const DEFAULT_SUPABASE_URL = 'https://oyzujyqzthqzvkvtwpvt.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95enVqeXF6dGhxenZrdnR3cHZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwNjk2NjksImV4cCI6MjExMDY0NTY2OX0.kqBdBubCkUwoLI5x_S_RRNvYFUNiq40j29dW7uybZsU';
+
+export type SupabaseConfigSource =
+  | 'env'
+  | 'server'
+  | 'localStorage'
+  | 'default'
+  | 'unconfigured';
 
 export interface SupabaseConfig {
   url: string;
@@ -258,7 +267,11 @@ export function getSupabaseConfig(): SupabaseConfig {
     return { url: envUrl, anonKey: envKey, source: 'env' };
   }
 
-  return { url: '', anonKey: '', source: 'unconfigured' };
+  return {
+    url: DEFAULT_SUPABASE_URL,
+    anonKey: DEFAULT_SUPABASE_ANON_KEY,
+    source: 'default',
+  };
 }
 
 let cachedClient: SupabaseClient | null = null;

@@ -817,6 +817,8 @@ export function SettingsAndSupabaseView() {
                       ? 'Variabel Lingkungan (.env / Hosting)'
                       : configSource === 'localStorage'
                       ? 'Konfigurasi Browser Tersimpan'
+                      : configSource === 'default'
+                      ? 'Konfigurasi Bawaan Aplikasi (Aktif Otomatis di Semua Web)'
                       : 'Belum dikonfigurasi'}
                   </span>
                 </p>

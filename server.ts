@@ -81,10 +81,11 @@ function getEffectiveServerConfig(): {
   }
 
   return {
-    url: '',
-    anonKey: '',
-    configured: false,
-    source: 'unconfigured',
+    url: 'https://oyzujyqzthqzvkvtwpvt.supabase.co',
+    anonKey:
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95enVqeXF6dGhxenZrdnR3cHZ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwNjk2NjksImV4cCI6MjExMDY0NTY2OX0.kqBdBubCkUwoLI5x_S_RRNvYFUNiq40j29dW7uybZsU',
+    configured: true,
+    source: 'env',
   };
 }
 

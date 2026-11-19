@@ -174,7 +174,7 @@ export function LoginView() {
               </p>
             </div>
 
-            {!configReady ? (
+            {!configReady && !isSupabaseConfigured ? (
               <div className="flex items-center gap-2.5 p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600">
                 <Database className="w-4 h-4 text-emerald-700 shrink-0 animate-pulse" />
                 <span>Menyinkronkan koneksi Supabase madrasah secara otomatis...</span>
