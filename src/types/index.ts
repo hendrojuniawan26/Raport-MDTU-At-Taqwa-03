@@ -85,6 +85,7 @@ export interface GradeRecord {
   final_score: number;
   predicate: string;
   description: string;
+  updated_by?: string | null;
 }
 
 export interface NonAcademicRecord {

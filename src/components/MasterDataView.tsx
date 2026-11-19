@@ -13,6 +13,9 @@ export function MasterDataView() {
     subjects,
     students,
     settings,
+    globalSearchQuery: searchQuery,
+    setGlobalSearchQuery: setSearchQuery,
+    selectedStudentId,
     upsertStudent,
     deleteStudent,
     upsertClass,
@@ -45,7 +48,13 @@ export function MasterDataView() {
     }
   }, [isAdmin, subTab]);
 
-  const [searchQuery, setSearchQuery] = useState('');
+  useEffect(() => {
+    if (selectedStudentId) {
+      setSubTab('students');
+      setFilterClassId('all');
+    }
+  }, [selectedStudentId]);
+
   const [filterClassId, setFilterClassId] = useState<string>('all');
 
   // Student Modal

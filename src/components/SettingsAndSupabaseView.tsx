@@ -4,6 +4,8 @@ import {
   Database,
   Download,
   Edit3,
+  Eye,
+  EyeOff,
   KeyRound,
   Link2,
   LogOut,
@@ -11,6 +13,7 @@ import {
   RefreshCw,
   Save,
   ShieldCheck,
+  Trash2,
   Users,
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
@@ -41,6 +44,8 @@ export function SettingsAndSupabaseView() {
     signOut,
     adminCreateUserAccount,
     updateSupabaseProfileRole,
+    adminUpdateUserPassword,
+    adminDeleteUserAccount,
     updateSupabaseCredentials,
     resetSupabaseCredentials,
     refreshFromSupabase,
@@ -61,7 +66,10 @@ export function SettingsAndSupabaseView() {
   const [editingAccount, setEditingAccount] =
     useState<Partial<UserProfile> | null>(null);
   const [accountPassword, setAccountPassword] = useState('');
+  const [showAccountPassword, setShowAccountPassword] = useState(false);
   const [savingAccount, setSavingAccount] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState<UserProfile | null>(null);
+  const [deletingLoading, setDeletingLoading] = useState(false);
 
   // Supabase credential inputs
   const [urlInput, setUrlInput] = useState(supabaseUrl);
@@ -139,6 +147,10 @@ export function SettingsAndSupabaseView() {
     setSavingAccount(true);
     try {
       if (editingAccount.id) {
+        if (accountPassword && accountPassword.length < 6) {
+          pushToast('error', 'Kata sandi baru minimal 6 karakter.');
+          return;
+        }
         await updateSupabaseProfileRole({
           id: editingAccount.id,
           email: editingAccount.email.trim(),
@@ -150,9 +162,17 @@ export function SettingsAndSupabaseView() {
           linked_student_id: editingAccount.linked_student_id || null,
           linked_student_nis: editingAccount.linked_student_nis || '',
         });
+        if (accountPassword) {
+          const pwdOk = await adminUpdateUserPassword(
+            editingAccount.id,
+            accountPassword
+          );
+          if (!pwdOk) return;
+        }
         setAccountModalOpen(false);
         setEditingAccount(null);
         setAccountPassword('');
+        setShowAccountPassword(false);
       } else {
         if (accountPassword.length < 6) {
           pushToast('error', 'Kata sandi awal minimal 6 karakter.');
@@ -173,10 +193,24 @@ export function SettingsAndSupabaseView() {
           setAccountModalOpen(false);
           setEditingAccount(null);
           setAccountPassword('');
+          setShowAccountPassword(false);
         }
       }
     } finally {
       setSavingAccount(false);
+    }
+  };
+
+  const handleConfirmDeleteAccount = async () => {
+    if (!deletingAccount) return;
+    setDeletingLoading(true);
+    const ok = await adminDeleteUserAccount(
+      deletingAccount.id,
+      deletingAccount.full_name
+    );
+    setDeletingLoading(false);
+    if (ok) {
+      setDeletingAccount(null);
     }
   };
 
@@ -716,6 +750,7 @@ export function SettingsAndSupabaseView() {
                     linked_student_nis: '',
                   });
                   setAccountPassword('');
+                  setShowAccountPassword(false);
                   setAccountModalOpen(true);
                 }}
                 className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 whitespace-nowrap shrink-0"
@@ -775,17 +810,36 @@ export function SettingsAndSupabaseView() {
                           {scopeText}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingAccount({ ...acc });
-                              setAccountModalOpen(true);
-                            }}
-                            aria-label={`Ubah ${acc.full_name}`}
-                            className="p-1.5 text-slate-500 hover:text-emerald-800 rounded-md hover:bg-slate-100"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingAccount({ ...acc });
+                                setAccountPassword('');
+                                setShowAccountPassword(false);
+                                setAccountModalOpen(true);
+                              }}
+                              title={`Edit profil & kata sandi ${acc.full_name}`}
+                              aria-label={`Ubah ${acc.full_name}`}
+                              className="p-1.5 text-slate-500 hover:text-emerald-800 rounded-md hover:bg-slate-100"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={acc.id === userProfile?.id}
+                              onClick={() => setDeletingAccount(acc)}
+                              title={
+                                acc.id === userProfile?.id
+                                  ? 'Tidak dapat menghapus akun yang sedang aktif login'
+                                  : `Hapus akun ${acc.full_name}`
+                              }
+                              aria-label={`Hapus ${acc.full_name}`}
+                              className="p-1.5 text-slate-500 hover:text-red-700 rounded-md hover:bg-red-50 disabled:opacity-35 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1130,7 +1184,7 @@ export function SettingsAndSupabaseView() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className={editingAccount.id ? 'sm:col-span-2' : ''}>
+                <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     Email Pengguna *
                   </label>
@@ -1149,22 +1203,40 @@ export function SettingsAndSupabaseView() {
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg disabled:bg-slate-50"
                   />
                 </div>
-                {!editingAccount.id && (
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      Kata Sandi Awal (min. 6 karakter) *
-                    </label>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    {editingAccount.id
+                      ? 'Kata Sandi Baru (opsional)'
+                      : 'Kata Sandi Awal (min. 6 karakter) *'}
+                  </label>
+                  <div className="relative">
                     <input
-                      type="password"
-                      required
-                      minLength={6}
-                      placeholder="Minimal 6 karakter"
+                      type={showAccountPassword ? 'text' : 'password'}
+                      required={!editingAccount.id}
+                      minLength={editingAccount.id ? undefined : 6}
+                      placeholder={
+                        editingAccount.id
+                          ? 'Kosongkan jika tidak diubah'
+                          : 'Minimal 6 karakter'
+                      }
                       value={accountPassword}
                       onChange={(e) => setAccountPassword(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                      className="w-full pl-3 pr-9 py-2 text-sm border border-slate-200 rounded-lg"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowAccountPassword((v) => !v)}
+                      aria-label="Tampilkan atau sembunyikan kata sandi"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
+                    >
+                      {showAccountPassword ? (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5" />
+                      )}
+                    </button>
                   </div>
-                )}
+                </div>
               </div>
 
               {editingAccount.role === 'wali_kelas' && (
@@ -1263,6 +1335,7 @@ export function SettingsAndSupabaseView() {
                     setAccountModalOpen(false);
                     setEditingAccount(null);
                     setAccountPassword('');
+                    setShowAccountPassword(false);
                   }}
                   className="px-4 py-2 text-sm font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50"
                 >
@@ -1281,6 +1354,54 @@ export function SettingsAndSupabaseView() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL KONFIRMASI HAPUS AKUN */}
+      {deletingAccount && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-xl w-full max-w-md p-6 shadow-xl space-y-4">
+            <div className="space-y-1.5">
+              <h3 className="text-base font-semibold text-slate-900">
+                Hapus Akun Pengguna?
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Akun berikut akan dihapus secara permanen dari Supabase Auth dan daftar pengguna aplikasi:
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-lg bg-red-50/70 border border-red-200 text-xs space-y-1">
+              <div className="font-semibold text-slate-900">
+                {deletingAccount.full_name}
+              </div>
+              <div className="font-mono text-slate-700">
+                {deletingAccount.email}
+              </div>
+              <div className="text-slate-600">
+                Peran: {ROLE_LABELS[deletingAccount.role]}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={deletingLoading}
+                onClick={() => setDeletingAccount(null)}
+                className="px-4 py-2 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 whitespace-nowrap"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deletingLoading}
+                onClick={handleConfirmDeleteAccount}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-red-700 rounded-lg hover:bg-red-800 disabled:opacity-60 whitespace-nowrap"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                {deletingLoading ? 'Menghapus...' : 'Ya, Hapus Akun'}
+              </button>
+            </div>
           </div>
         </div>
       )}

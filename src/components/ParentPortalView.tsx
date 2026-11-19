@@ -5,6 +5,7 @@ import {
   Eye,
   GraduationCap,
   MessageSquareText,
+  RefreshCw,
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useApp } from '../context/AppContext';
@@ -25,6 +26,9 @@ export function ParentPortalView({ onNavigate }: ParentPortalViewProps) {
     students,
     grades,
     nonAcademics,
+    dataLoading,
+    refreshFromSupabase,
+    parentClassStats,
   } = useApp();
 
   const child = useMemo(
@@ -61,6 +65,20 @@ export function ParentPortalView({ onNavigate }: ParentPortalViewProps) {
     [classSummaries, child]
   );
 
+  if (dataLoading && (!child || !childSummary)) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-3">
+        <RefreshCw className="w-7 h-7 text-emerald-700 mx-auto animate-spin" />
+        <h2 className="text-base font-semibold text-slate-900">
+          Memuat Data Capaian Santri...
+        </h2>
+        <p className="text-xs text-slate-500">
+          Mengambil nilai rapor dan kehadiran terbaru dari server Supabase.
+        </p>
+      </div>
+    );
+  }
+
   if (!child || !childSummary) {
     return (
       <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2">
@@ -74,6 +92,10 @@ export function ParentPortalView({ onNavigate }: ParentPortalViewProps) {
       </div>
     );
   }
+
+  const effectiveRank = parentClassStats?.rank ?? childSummary.rank;
+  const effectiveTotalStudents =
+    parentClassStats?.totalStudents ?? classSummaries.length;
 
   const pengetahuanSubjects = sortedSubjects.filter(
     (s) => s.category === 'Pengetahuan'
@@ -113,6 +135,17 @@ export function ParentPortalView({ onNavigate }: ParentPortalViewProps) {
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
+            disabled={dataLoading}
+            onClick={refreshFromSupabase}
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-60 transition-colors whitespace-nowrap shrink-0"
+          >
+            <RefreshCw
+              className={`w-4 h-4 text-emerald-700 ${dataLoading ? 'animate-spin' : ''}`}
+            />
+            Muat Ulang Nilai
+          </button>
+          <button
+            type="button"
             onClick={() => onNavigate('raport')}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 transition-colors whitespace-nowrap shrink-0"
           >
@@ -143,10 +176,10 @@ export function ParentPortalView({ onNavigate }: ParentPortalViewProps) {
             <Award className="w-4 h-4 text-emerald-700" />
           </div>
           <p className="mt-3 text-2xl font-bold text-slate-900 font-mono tabular-nums">
-            #{childSummary.rank}
+            #{effectiveRank}
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            Dari {classSummaries.length} santri aktif
+            Dari {effectiveTotalStudents} santri aktif
           </p>
         </div>
 

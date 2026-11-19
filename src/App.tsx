@@ -4,12 +4,14 @@ import {
   Eye,
   FileSpreadsheet,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Menu,
   Printer,
   Settings,
   Table2,
   Users,
+  WifiOff,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -20,6 +22,7 @@ import { LoginView } from './components/LoginView';
 import { MasterDataView } from './components/MasterDataView';
 import { RaportPreviewView } from './components/RaportPreviewView';
 import { SettingsAndSupabaseView } from './components/SettingsAndSupabaseView';
+import { TopBarStudentSearch } from './components/TopBarStudentSearch';
 import { AppProvider, useApp } from './context/AppContext';
 import { getAllowedTabs, ROLE_LABELS } from './lib/rbac';
 import type { ActiveTab } from './types';
@@ -67,6 +70,8 @@ function MainShell() {
     settings,
     userProfile,
     signOut,
+    isOnline,
+    pendingSavesCount,
     toasts,
     dismissToast,
   } = useApp();
@@ -290,37 +295,50 @@ function MainShell() {
       {/* Main Content Area */}
       <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
         {/* Top Bar Contract (Non-Print) */}
-        <header className="no-print sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200 px-4 sm:px-8 h-14 flex items-center justify-between gap-4">
+        <header className="no-print sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200 px-4 sm:px-8 h-14 flex items-center justify-between gap-3 sm:gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="Buka menu navigasi"
-              className="lg:hidden p-2 -ml-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+              className="lg:hidden p-2 -ml-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-2 text-sm min-w-0 truncate">
-              <span className="font-semibold text-slate-900 truncate">
+              <span className="hidden md:inline font-semibold text-slate-900 truncate">
                 {settings.nama_madrasah}
               </span>
-              <span className="text-slate-300" aria-hidden="true">
+              <span
+                className="hidden md:inline text-slate-300"
+                aria-hidden="true"
+              >
                 /
               </span>
-              <span className="text-slate-600 truncate">
+              <span className="font-medium md:font-normal text-slate-700 md:text-slate-600 truncate">
                 {activeNav?.displayLabel || 'Dashboard'}
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="hidden md:inline text-xs text-slate-500 whitespace-nowrap">
+          <div className="flex items-center justify-end gap-2.5 sm:gap-3 flex-1 min-w-0">
+            {pendingSavesCount > 0 && (
+              <span className="hidden md:inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 whitespace-nowrap">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Menyimpan ({pendingSavesCount})...
+              </span>
+            )}
+            <TopBarStudentSearch
+              activeTab={activeTab}
+              onNavigate={handleNavigate}
+            />
+            <span className="hidden xl:inline text-xs text-slate-500 whitespace-nowrap">
               {userProfile.full_name} · {roleLabel}
             </span>
             <button
               type="button"
               onClick={() => handleNavigate('raport')}
-              className="px-3.5 py-1.5 text-xs font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 transition-colors whitespace-nowrap shrink-0"
+              className="hidden sm:inline-flex px-3.5 py-1.5 text-xs font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 transition-colors whitespace-nowrap shrink-0"
             >
               {userProfile.role === 'orang_tua'
                 ? 'Raport Ananda'
@@ -328,6 +346,15 @@ function MainShell() {
             </button>
           </div>
         </header>
+
+        {!isOnline && (
+          <div className="no-print bg-amber-50 border-b border-amber-200 px-4 sm:px-8 py-2.5 text-xs text-amber-900 flex items-center gap-2">
+            <WifiOff className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>
+              Koneksi internet terputus. Perubahan nilai belum dapat disinkronkan ke Supabase sampai koneksi kembali aktif.
+            </span>
+          </div>
+        )}
 
         {/* Main Workspace */}
         <main className="flex-1 px-4 sm:px-8 py-6 max-w-[1320px] w-full mx-auto">

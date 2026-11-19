@@ -1,8 +1,11 @@
 import {
   AlertCircle,
+  CheckCircle2,
   ClipboardEdit,
   Download,
   FileSpreadsheet,
+  Info,
+  Loader2,
   Search,
 } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
@@ -28,6 +31,9 @@ export function LegerView() {
     nonAcademics,
     selectedClassId,
     setSelectedClassId,
+    globalSearchQuery: searchQuery,
+    setGlobalSearchQuery: setSearchQuery,
+    pendingSavesCount,
     upsertGrade,
     upsertNonAcademic,
   } = useApp();
@@ -36,7 +42,9 @@ export function LegerView() {
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>(
     subjects[0]?.id || ''
   );
-  const [searchQuery, setSearchQuery] = useState('');
+  const [editingScores, setEditingScores] = useState<Record<string, string>>(
+    {}
+  );
   const [editingNonAcad, setEditingNonAcad] =
     useState<NonAcademicRecord | null>(null);
   const [editingStudentName, setEditingStudentName] = useState<string>('');
@@ -129,17 +137,18 @@ export function LegerView() {
     );
   }, [legerSummaries, searchQuery]);
 
-  const handleScoreChange = (
+  const commitScore = (
     studentId: string,
     subjectId: string,
     field: 'formatif' | 'pts' | 'pas' | 'praktik',
     rawVal: string
   ) => {
-    const val = rawVal === '' ? 0 : clampScore(Number(rawVal));
+    const parsed = rawVal.trim() === '' ? 0 : Number(rawVal);
+    const val = Number.isNaN(parsed) ? 0 : clampScore(parsed);
     const current = legerSummaries.find((s) => s.student.id === studentId)
       ?.gradesBySubject[subjectId];
 
-    upsertGrade({
+    void upsertGrade({
       student_id: studentId,
       subject_id: subjectId,
       class_id: selectedClass?.id || '',
@@ -148,6 +157,38 @@ export function LegerView() {
       pas: field === 'pas' ? val : current?.pas ?? 0,
       praktik: field === 'praktik' ? val : current?.praktik ?? 0,
     });
+  };
+
+  const handleScoreInputChange = (
+    studentId: string,
+    subjectId: string,
+    field: 'formatif' | 'pts' | 'pas' | 'praktik',
+    rawVal: string
+  ) => {
+    const cellKey = `${studentId}::${subjectId}::${field}`;
+    setEditingScores((prev) => ({ ...prev, [cellKey]: rawVal }));
+    if (rawVal.trim() === '') return;
+    const parsed = Number(rawVal);
+    if (!Number.isNaN(parsed)) {
+      commitScore(studentId, subjectId, field, rawVal);
+    }
+  };
+
+  const handleScoreInputBlur = (
+    studentId: string,
+    subjectId: string,
+    field: 'formatif' | 'pts' | 'pas' | 'praktik'
+  ) => {
+    const cellKey = `${studentId}::${subjectId}::${field}`;
+    const draft = editingScores[cellKey];
+    if (draft !== undefined) {
+      commitScore(studentId, subjectId, field, draft);
+      setEditingScores((prev) => {
+        const next = { ...prev };
+        delete next[cellKey];
+        return next;
+      });
+    }
   };
 
   const handleSaveNonAcademic = async (e: React.FormEvent) => {
@@ -274,11 +315,22 @@ export function LegerView() {
           </div>
         </div>
 
-        <div className="text-xs text-slate-500 flex items-center gap-2">
-          <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
-          <span>
+        <div className="text-xs text-slate-500 flex flex-wrap items-center gap-3">
+          <span className="inline-flex items-center gap-1.5">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
             {filteredSummaries.length} santri · Nilai di bawah KKM ditandai merah
           </span>
+          {pendingSavesCount > 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-amber-700 font-medium">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Menyimpan ({pendingSavesCount})...
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-emerald-800">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Tersimpan otomatis
+            </span>
+          )}
         </div>
       </div>
 
@@ -296,6 +348,23 @@ export function LegerView() {
               Ubah angka langsung pada sel tabel — Nilai Akhir, Predikat & Ranking otomatis terhitung.
             </div>
           </div>
+
+          {!canEditActiveSubject && (
+            <div className="px-5 py-3 bg-amber-50 border-b border-amber-200 flex items-start gap-2.5 text-xs text-amber-900">
+              <Info className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                {isGuru && editableSubjects.length === 0 ? (
+                  <span>
+                    Akun Guru Mapel Anda belum ditautkan ke mata pelajaran apa pun (mode baca saja). Minta Admin Madrasah menugaskan mata pelajaran pada menu <strong>Pengaturan → Manajemen Akun</strong> atau menyamakan nama guru di <strong>Data Master Mapel</strong>.
+                  </span>
+                ) : (
+                  <span>
+                    Anda melihat mata pelajaran/kelas ini dalam <strong>mode baca saja</strong>. Pengeditan nilai hanya dibuka untuk kelas atau mata pelajaran yang menjadi tugas Anda.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left border-collapse">
@@ -361,26 +430,44 @@ export function LegerView() {
                           {sum.student.full_name}
                         </td>
                         {(['formatif', 'pts', 'pas', 'praktik'] as const).map(
-                          (field) => (
-                            <td key={field} className="px-2 py-1.5 text-center">
-                              <input
-                                type="number"
-                                min={0}
-                                max={100}
-                                disabled={!canEditActiveSubject}
-                                value={grade?.[field] ?? 0}
-                                onChange={(e) =>
-                                  handleScoreChange(
-                                    sum.student.id,
-                                    activeSubject.id,
-                                    field,
-                                    e.target.value
-                                  )
-                                }
-                                className="w-16 px-2 py-1 text-center font-mono tabular-nums text-sm border border-slate-200 rounded disabled:bg-slate-50 disabled:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:border-emerald-700"
-                              />
-                            </td>
-                          )
+                          (field) => {
+                            const cellKey = `${sum.student.id}::${activeSubject.id}::${field}`;
+                            const displayVal =
+                              editingScores[cellKey] !== undefined
+                                ? editingScores[cellKey]
+                                : String(grade?.[field] ?? 0);
+                            return (
+                              <td
+                                key={field}
+                                className="px-2 py-1.5 text-center"
+                              >
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  disabled={!canEditActiveSubject}
+                                  value={displayVal}
+                                  onFocus={(e) => e.currentTarget.select()}
+                                  onChange={(e) =>
+                                    handleScoreInputChange(
+                                      sum.student.id,
+                                      activeSubject.id,
+                                      field,
+                                      e.target.value
+                                    )
+                                  }
+                                  onBlur={() =>
+                                    handleScoreInputBlur(
+                                      sum.student.id,
+                                      activeSubject.id,
+                                      field
+                                    )
+                                  }
+                                  className="w-16 px-2 py-1 text-center font-mono tabular-nums text-sm border border-slate-200 rounded disabled:bg-slate-50 disabled:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:border-emerald-700"
+                                />
+                              </td>
+                            );
+                          }
                         )}
                         <td
                           className={`px-3 py-2 text-center font-mono tabular-nums font-bold ${
@@ -475,7 +562,17 @@ export function LegerView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredSummaries.map((sum, idx) => (
+                {filteredSummaries.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={sortedSubjects.length + 7}
+                      className="px-4 py-10 text-center text-slate-500"
+                    >
+                      Belum ada santri aktif yang sesuai pada kelas ini.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSummaries.map((sum, idx) => (
                   <tr key={sum.student.id} className="hover:bg-slate-50/70">
                     <td className="px-3 py-2.5 text-center font-mono tabular-nums text-slate-500 sticky left-0 bg-white border-r border-slate-100">
                       {idx + 1}
@@ -534,7 +631,8 @@ export function LegerView() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  ))
+                )}
               </tbody>
             </table>
           </div>

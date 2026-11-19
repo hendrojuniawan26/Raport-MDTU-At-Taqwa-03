@@ -1,5 +1,5 @@
 import { Download, Eye, FileDown, Lock, Printer } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { buildClassLegerSummaries } from '../lib/grading';
 import { exportClassRaportPdf, exportSingleRaportPdf } from '../lib/pdfExport';
@@ -18,10 +18,18 @@ export function RaportPreviewView() {
     nonAcademics,
     selectedClassId,
     setSelectedClassId,
+    selectedStudentId,
+    setSelectedStudentId,
+    parentClassStats,
   } = useApp();
 
   const [previewMode, setPreviewMode] = useState<'single' | 'batch'>('single');
-  const [selectedStudentId, setSelectedStudentId] = useState<string>('');
+
+  useEffect(() => {
+    if (selectedStudentId) {
+      setPreviewMode('single');
+    }
+  }, [selectedStudentId]);
 
   const isParent = userProfile?.role === 'orang_tua';
   const isWali = userProfile?.role === 'wali_kelas';
@@ -90,6 +98,19 @@ export function RaportPreviewView() {
       summaries.find((s) => s.student.id === selectedStudentId) || summaries[0]
     );
   }, [isParent, parentChild, summaries, selectedStudentId]);
+
+  const effectiveActiveSummary = useMemo(() => {
+    if (!activeSummary) return undefined;
+    if (isParent && parentClassStats) {
+      return { ...activeSummary, rank: parentClassStats.rank };
+    }
+    return activeSummary;
+  }, [activeSummary, isParent, parentClassStats]);
+
+  const effectiveTotalStudentsInClass =
+    isParent && parentClassStats
+      ? parentClassStats.totalStudents
+      : summaries.length;
 
   const handlePaperSizeChange = (ukuran: 'F4' | 'A4') => {
     updateSettings({ ...settings, ukuran_kertas: ukuran });
@@ -302,10 +323,10 @@ export function RaportPreviewView() {
           <div className="bg-white border border-slate-200 rounded-xl p-12 text-center text-sm text-slate-500">
             Belum ada santri aktif pada kelas {selectedClass?.name}. Tambahkan data santri di menu Data Master atau Import Excel terlebih dahulu.
           </div>
-        ) : previewMode === 'single' && activeSummary ? (
+        ) : previewMode === 'single' && effectiveActiveSummary ? (
           <RaportSheet
-            summary={activeSummary}
-            totalStudentsInClass={summaries.length}
+            summary={effectiveActiveSummary}
+            totalStudentsInClass={effectiveTotalStudentsInClass}
             subjects={sortedSubjects}
             madrasahClass={selectedClass}
             settings={settings}

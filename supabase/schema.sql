@@ -312,6 +312,120 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
+-- Admin RPC: Ubah kata sandi akun pengguna secara aman
+create or replace function public.admin_update_user_password(
+  target_user_id uuid,
+  new_password text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Hanya Admin Madrasah yang dapat mengubah kata sandi akun.';
+  end if;
+  if length(coalesce(new_password, '')) < 6 then
+    raise exception 'Kata sandi baru minimal 6 karakter.';
+  end if;
+
+  update auth.users
+  set
+    encrypted_password = crypt(new_password, gen_salt('bf', 10)),
+    updated_at = now()
+  where id = target_user_id;
+
+  if not found then
+    raise exception 'Akun pengguna tidak ditemukan di sistem autentikasi.';
+  end if;
+end;
+$$;
+
+revoke all on function public.admin_update_user_password(uuid, text) from public, anon;
+grant execute on function public.admin_update_user_password(uuid, text) to authenticated;
+
+-- Admin RPC: Hapus akun pengguna beserta profilnya
+create or replace function public.admin_delete_user_account(
+  target_user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Hanya Admin Madrasah yang dapat menghapus akun.';
+  end if;
+  if target_user_id = auth.uid() then
+    raise exception 'Tidak dapat menghapus akun Admin yang sedang aktif digunakan.';
+  end if;
+
+  delete from auth.users where id = target_user_id;
+  delete from public.profiles where id = target_user_id;
+end;
+$$;
+
+revoke all on function public.admin_delete_user_account(uuid) from public, anon;
+grant execute on function public.admin_delete_user_account(uuid) to authenticated;
+
+-- Parent RPC: Hitung peringkat & jumlah santri aktif sekelas tanpa membuka data santri lain
+create or replace function public.get_parent_student_rank(
+  target_student_id uuid,
+  target_academic_year text,
+  target_semester text
+)
+returns table (rank integer, total_students integer)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_class_id uuid;
+begin
+  if not (public.is_staff() or public.is_parent_of_student(target_student_id)) then
+    raise exception 'Akses ditolak.';
+  end if;
+
+  select class_id into v_class_id
+  from public.students
+  where id = target_student_id;
+
+  if v_class_id is null then
+    return query select 1, 1;
+    return;
+  end if;
+
+  return query
+  with student_totals as (
+    select
+      s.id as sid,
+      coalesce(sum(g.final_score), 0) as total_score
+    from public.students s
+    left join public.grades g
+      on g.student_id = s.id
+      and g.academic_year = target_academic_year
+      and g.semester = target_semester
+    where s.class_id = v_class_id
+      and s.status = 'Aktif'
+    group by s.id
+  ),
+  ranked as (
+    select
+      sid,
+      rank() over (order by total_score desc)::integer as r,
+      count(*) over ()::integer as total_cnt
+    from student_totals
+  )
+  select r, total_cnt from ranked where sid = target_student_id;
+end;
+$$;
+
+revoke all on function public.get_parent_student_rank(uuid, text, text) from public, anon;
+grant execute on function public.get_parent_student_rank(uuid, text, text) to authenticated;
+
 -- Policies Profiles
 drop policy if exists "Users view profiles" on public.profiles;
 drop policy if exists "Users view own or admin view all profiles" on public.profiles;
