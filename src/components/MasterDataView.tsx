@@ -74,6 +74,7 @@ export function MasterDataView() {
   const [editingSubject, setEditingSubject] = useState<Partial<Subject> | null>(
     null
   );
+  const [savingModal, setSavingModal] = useState(false);
 
   const sortedSubjects = useMemo(
     () => [...subjects].sort((a, b) => a.sort_order - b.sort_order),
@@ -108,21 +109,28 @@ export function MasterDataView() {
       pushToast('error', 'NIS, Nama Santri, dan Kelas wajib diisi.');
       return;
     }
-    await upsertStudent({
-      id: editingStudent.id,
-      nis: editingStudent.nis.trim(),
-      nisn: (editingStudent.nisn || '').trim(),
-      full_name: editingStudent.full_name.trim(),
-      birth_place: (editingStudent.birth_place || 'Cibeureum').trim(),
-      birth_date: editingStudent.birth_date || '',
-      gender: (editingStudent.gender as 'L' | 'P') || 'L',
-      parent_name: (editingStudent.parent_name || '-').trim(),
-      address: (editingStudent.address || '-').trim(),
-      class_id: editingStudent.class_id,
-      status: (editingStudent.status as Student['status']) || 'Aktif',
-    });
-    setStudentModalOpen(false);
-    setEditingStudent(null);
+    setSavingModal(true);
+    try {
+      const ok = await upsertStudent({
+        id: editingStudent.id,
+        nis: editingStudent.nis.trim(),
+        nisn: (editingStudent.nisn || '').trim(),
+        full_name: editingStudent.full_name.trim(),
+        birth_place: (editingStudent.birth_place || 'Cibeureum').trim(),
+        birth_date: editingStudent.birth_date || '',
+        gender: (editingStudent.gender as 'L' | 'P') || 'L',
+        parent_name: (editingStudent.parent_name || '-').trim(),
+        address: (editingStudent.address || '-').trim(),
+        class_id: editingStudent.class_id,
+        status: (editingStudent.status as Student['status']) || 'Aktif',
+      });
+      if (ok) {
+        setStudentModalOpen(false);
+        setEditingStudent(null);
+      }
+    } finally {
+      setSavingModal(false);
+    }
   };
 
   const handleSaveClass = async (e: React.FormEvent) => {
@@ -131,16 +139,23 @@ export function MasterDataView() {
       pushToast('error', 'Nama Kelas dan Wali Kelas wajib diisi.');
       return;
     }
-    await upsertClass({
-      id: editingClass.id,
-      name: editingClass.name.trim(),
-      level: Number(editingClass.level || 1),
-      academic_year: editingClass.academic_year || settings.tahun_pelajaran,
-      wali_kelas_name: editingClass.wali_kelas_name.trim(),
-      wali_kelas_nip: (editingClass.wali_kelas_nip || '-').trim(),
-    });
-    setClassModalOpen(false);
-    setEditingClass(null);
+    setSavingModal(true);
+    try {
+      const ok = await upsertClass({
+        id: editingClass.id,
+        name: editingClass.name.trim(),
+        level: Number(editingClass.level || 1),
+        academic_year: editingClass.academic_year || settings.tahun_pelajaran,
+        wali_kelas_name: editingClass.wali_kelas_name.trim(),
+        wali_kelas_nip: (editingClass.wali_kelas_nip || '-').trim(),
+      });
+      if (ok) {
+        setClassModalOpen(false);
+        setEditingClass(null);
+      }
+    } finally {
+      setSavingModal(false);
+    }
   };
 
   const handleSaveSubject = async (e: React.FormEvent) => {
@@ -149,19 +164,26 @@ export function MasterDataView() {
       pushToast('error', 'Kode dan Nama Mata Pelajaran wajib diisi.');
       return;
     }
-    await upsertSubject({
-      id: editingSubject.id,
-      code: editingSubject.code.trim().toUpperCase(),
-      name: editingSubject.name.trim(),
-      arabic_name: (editingSubject.arabic_name || '').trim(),
-      teacher_name: (editingSubject.teacher_name || '-').trim(),
-      category:
-        (editingSubject.category as Subject['category']) || 'Pengetahuan',
-      kkm: Math.max(0, Math.min(100, Number(editingSubject.kkm ?? 62))),
-      sort_order: Number(editingSubject.sort_order ?? subjects.length + 1),
-    });
-    setSubjectModalOpen(false);
-    setEditingSubject(null);
+    setSavingModal(true);
+    try {
+      const ok = await upsertSubject({
+        id: editingSubject.id,
+        code: editingSubject.code.trim().toUpperCase(),
+        name: editingSubject.name.trim(),
+        arabic_name: (editingSubject.arabic_name || '').trim(),
+        teacher_name: (editingSubject.teacher_name || '-').trim(),
+        category:
+          (editingSubject.category as Subject['category']) || 'Pengetahuan',
+        kkm: Math.max(0, Math.min(100, Number(editingSubject.kkm ?? 62))),
+        sort_order: Number(editingSubject.sort_order ?? subjects.length + 1),
+      });
+      if (ok) {
+        setSubjectModalOpen(false);
+        setEditingSubject(null);
+      }
+    } finally {
+      setSavingModal(false);
+    }
   };
 
   return (
@@ -680,9 +702,10 @@ export function MasterDataView() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
+                  disabled={savingModal}
+                  className="px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-60"
                 >
-                  Simpan Santri
+                  {savingModal ? 'Menyimpan...' : 'Simpan Santri'}
                 </button>
               </div>
             </form>
@@ -776,9 +799,10 @@ export function MasterDataView() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
+                  disabled={savingModal}
+                  className="px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-60"
                 >
-                  Simpan Kelas
+                  {savingModal ? 'Menyimpan...' : 'Simpan Kelas'}
                 </button>
               </div>
             </form>
@@ -932,9 +956,10 @@ export function MasterDataView() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
+                  disabled={savingModal}
+                  className="px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-60"
                 >
-                  Simpan Mapel
+                  {savingModal ? 'Menyimpan...' : 'Simpan Mapel'}
                 </button>
               </div>
             </form>

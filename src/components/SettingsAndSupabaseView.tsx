@@ -68,6 +68,8 @@ export function SettingsAndSupabaseView() {
   const [accountPassword, setAccountPassword] = useState('');
   const [showAccountPassword, setShowAccountPassword] = useState(false);
   const [savingAccount, setSavingAccount] = useState(false);
+  const [accountModalError, setAccountModalError] = useState('');
+  const [savingSettings, setSavingSettings] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState<UserProfile | null>(null);
   const [deletingLoading, setDeletingLoading] = useState(false);
 
@@ -95,7 +97,12 @@ export function SettingsAndSupabaseView() {
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    await updateSettings(formSettings);
+    setSavingSettings(true);
+    try {
+      await updateSettings(formSettings);
+    } finally {
+      setSavingSettings(false);
+    }
   };
 
   const handleTestAndSaveSupabase = async (e: React.FormEvent) => {
@@ -135,12 +142,15 @@ export function SettingsAndSupabaseView() {
 
   const handleSaveAccount = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAccountModalError('');
     if (
       !editingAccount?.email?.trim() ||
       !editingAccount.full_name?.trim() ||
       !editingAccount.role
     ) {
-      pushToast('error', 'Nama lengkap, email, dan peran wajib diisi.');
+      const msg = 'Nama lengkap, email, dan peran wajib diisi.';
+      setAccountModalError(msg);
+      pushToast('error', msg);
       return;
     }
 
@@ -148,10 +158,12 @@ export function SettingsAndSupabaseView() {
     try {
       if (editingAccount.id) {
         if (accountPassword && accountPassword.length < 6) {
-          pushToast('error', 'Kata sandi baru minimal 6 karakter.');
+          const msg = 'Kata sandi baru minimal 6 karakter.';
+          setAccountModalError(msg);
+          pushToast('error', msg);
           return;
         }
-        await updateSupabaseProfileRole({
+        const roleOk = await updateSupabaseProfileRole({
           id: editingAccount.id,
           email: editingAccount.email.trim(),
           full_name: editingAccount.full_name.trim(),
@@ -162,23 +174,35 @@ export function SettingsAndSupabaseView() {
           linked_student_id: editingAccount.linked_student_id || null,
           linked_student_nis: editingAccount.linked_student_nis || '',
         });
+        if (!roleOk) {
+          setAccountModalError('Gagal memperbarui profil & peran pengguna.');
+          return;
+        }
         if (accountPassword) {
           const pwdOk = await adminUpdateUserPassword(
             editingAccount.id,
             accountPassword
           );
-          if (!pwdOk) return;
+          if (!pwdOk) {
+            setAccountModalError(
+              'Peran berhasil disimpan, tetapi gagal memperbarui kata sandi. Pastikan SQL terbaru sudah dijalankan.'
+            );
+            return;
+          }
         }
         setAccountModalOpen(false);
         setEditingAccount(null);
         setAccountPassword('');
         setShowAccountPassword(false);
+        setAccountModalError('');
       } else {
         if (accountPassword.length < 6) {
-          pushToast('error', 'Kata sandi awal minimal 6 karakter.');
+          const msg = 'Kata sandi awal minimal 6 karakter.';
+          setAccountModalError(msg);
+          pushToast('error', msg);
           return;
         }
-        const ok = await adminCreateUserAccount({
+        const res = await adminCreateUserAccount({
           email: editingAccount.email.trim(),
           password: accountPassword,
           fullName: editingAccount.full_name.trim(),
@@ -189,11 +213,14 @@ export function SettingsAndSupabaseView() {
             linkedStudentNis: editingAccount.linked_student_nis || undefined,
           },
         });
-        if (ok) {
+        if (res.ok) {
           setAccountModalOpen(false);
           setEditingAccount(null);
           setAccountPassword('');
           setShowAccountPassword(false);
+          setAccountModalError('');
+        } else if (res.error) {
+          setAccountModalError(res.error);
         }
       }
     } finally {
@@ -703,10 +730,11 @@ export function SettingsAndSupabaseView() {
               <div className="pt-2 flex items-center justify-end gap-3">
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900"
+                  disabled={savingSettings}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-60"
                 >
                   <Save className="w-4 h-4" />
-                  Simpan Pengaturan
+                  {savingSettings ? 'Menyimpan...' : 'Simpan Pengaturan'}
                 </button>
               </div>
             </div>
@@ -751,6 +779,7 @@ export function SettingsAndSupabaseView() {
                   });
                   setAccountPassword('');
                   setShowAccountPassword(false);
+                  setAccountModalError('');
                   setAccountModalOpen(true);
                 }}
                 className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 whitespace-nowrap shrink-0"
@@ -817,6 +846,7 @@ export function SettingsAndSupabaseView() {
                                 setEditingAccount({ ...acc });
                                 setAccountPassword('');
                                 setShowAccountPassword(false);
+                                setAccountModalError('');
                                 setAccountModalOpen(true);
                               }}
                               title={`Edit profil & kata sandi ${acc.full_name}`}
@@ -1327,6 +1357,12 @@ export function SettingsAndSupabaseView() {
                 </div>
               )}
 
+              {accountModalError && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed">
+                  {accountModalError}
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1336,6 +1372,7 @@ export function SettingsAndSupabaseView() {
                     setEditingAccount(null);
                     setAccountPassword('');
                     setShowAccountPassword(false);
+                    setAccountModalError('');
                   }}
                   className="px-4 py-2 text-sm font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50"
                 >

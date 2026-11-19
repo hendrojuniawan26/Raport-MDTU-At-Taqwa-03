@@ -312,6 +312,168 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
+-- Admin RPC: Buat akun pengguna baru langsung aktif tanpa terkendala batas email konfirmasi SMTP
+create or replace function public.admin_create_user_account(
+  p_email text,
+  p_password text,
+  p_full_name text,
+  p_role text default 'guru',
+  p_assigned_class_id uuid default null,
+  p_assigned_subject_ids uuid[] default '{}',
+  p_linked_student_nis text default ''
+)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = public, auth, extensions
+as $$
+declare
+  v_user_id uuid := gen_random_uuid();
+  v_email text := lower(trim(coalesce(p_email, '')));
+  v_full_name text := trim(coalesce(p_full_name, ''));
+  v_role text;
+  v_student_nis text := trim(coalesce(p_linked_student_nis, ''));
+  v_student_id uuid;
+  v_profile public.profiles;
+begin
+  if not public.is_admin() then
+    raise exception 'Hanya Admin Madrasah yang dapat membuat akun baru.';
+  end if;
+
+  if v_email = '' or position('@' in v_email) = 0 then
+    raise exception 'Alamat email tidak valid.';
+  end if;
+
+  if v_full_name = '' then
+    raise exception 'Nama lengkap wajib diisi.';
+  end if;
+
+  if length(coalesce(p_password, '')) < 6 then
+    raise exception 'Kata sandi awal minimal 6 karakter.';
+  end if;
+
+  v_role := case
+    when p_role in ('admin', 'wali_kelas', 'guru', 'orang_tua') then p_role
+    else 'guru'
+  end;
+
+  if exists (
+    select 1 from auth.users
+    where lower(email) = v_email
+      and deleted_at is null
+  ) then
+    raise exception 'Email "%" sudah terdaftar pada sistem.', v_email;
+  end if;
+
+  if v_role = 'orang_tua' and v_student_nis <> '' then
+    select id into v_student_id
+    from public.students
+    where lower(trim(nis)) = lower(v_student_nis)
+    limit 1;
+  end if;
+
+  insert into auth.users (
+    instance_id,
+    id,
+    aud,
+    role,
+    email,
+    encrypted_password,
+    email_confirmed_at,
+    raw_app_meta_data,
+    raw_user_meta_data,
+    created_at,
+    updated_at,
+    confirmation_token,
+    email_change,
+    email_change_token_new,
+    recovery_token
+  ) values (
+    '00000000-0000-0000-0000-000000000000',
+    v_user_id,
+    'authenticated',
+    'authenticated',
+    v_email,
+    crypt(p_password, gen_salt('bf', 10)),
+    now(),
+    '{"provider":"email","providers":["email"]}'::jsonb,
+    jsonb_build_object(
+      'full_name', v_full_name,
+      'role', v_role,
+      'assigned_class_id', case when v_role = 'wali_kelas' and p_assigned_class_id is not null then p_assigned_class_id::text else '' end,
+      'assigned_subject_ids', case when v_role = 'guru' then to_jsonb(coalesce(p_assigned_subject_ids, '{}'::uuid[])) else '[]'::jsonb end,
+      'linked_student_nis', case when v_role = 'orang_tua' then v_student_nis else '' end
+    ),
+    now(),
+    now(),
+    '',
+    '',
+    '',
+    ''
+  );
+
+  insert into auth.identities (
+    id,
+    user_id,
+    identity_data,
+    provider,
+    provider_id,
+    last_sign_in_at,
+    created_at,
+    updated_at
+  ) values (
+    gen_random_uuid(),
+    v_user_id,
+    jsonb_build_object(
+      'sub', v_user_id::text,
+      'email', v_email,
+      'email_verified', true,
+      'phone_verified', false
+    ),
+    'email',
+    v_user_id::text,
+    now(),
+    now(),
+    now()
+  )
+  on conflict do nothing;
+
+  insert into public.profiles (
+    id,
+    email,
+    full_name,
+    role,
+    assigned_class_id,
+    assigned_subject_ids,
+    linked_student_id,
+    linked_student_nis
+  ) values (
+    v_user_id,
+    v_email,
+    v_full_name,
+    v_role,
+    case when v_role = 'wali_kelas' then p_assigned_class_id else null end,
+    case when v_role = 'guru' then coalesce(p_assigned_subject_ids, '{}'::uuid[]) else '{}'::uuid[] end,
+    case when v_role = 'orang_tua' then v_student_id else null end,
+    case when v_role = 'orang_tua' then v_student_nis else '' end
+  )
+  on conflict (id) do update set
+    email = excluded.email,
+    full_name = excluded.full_name,
+    role = excluded.role,
+    assigned_class_id = excluded.assigned_class_id,
+    assigned_subject_ids = excluded.assigned_subject_ids,
+    linked_student_id = excluded.linked_student_id,
+    linked_student_nis = excluded.linked_student_nis
+  returning * into v_profile;
+
+  return v_profile;
+end;
+$$;
+
+revoke all on function public.admin_create_user_account(text, text, text, text, uuid, uuid[], text) from public, anon;
+grant execute on function public.admin_create_user_account(text, text, text, text, uuid, uuid[], text) to authenticated;
+
 -- Admin RPC: Ubah kata sandi akun pengguna secara aman
 create or replace function public.admin_update_user_password(
   target_user_id uuid,

@@ -93,9 +93,9 @@ interface AppContextValue {
     fullName: string;
     role: UserRole;
     options?: SignUpExtraOptions;
-  }) => Promise<boolean>;
+  }) => Promise<{ ok: boolean; error?: string }>;
   signOut: () => Promise<void>;
-  updateSupabaseProfileRole: (profile: UserProfile) => Promise<void>;
+  updateSupabaseProfileRole: (profile: UserProfile) => Promise<boolean>;
   adminUpdateUserPassword: (userId: string, newPassword: string) => Promise<boolean>;
   adminDeleteUserAccount: (userId: string, fullName?: string) => Promise<boolean>;
 
@@ -105,12 +105,12 @@ interface AppContextValue {
   initializeMdtuDataInSupabase: () => Promise<void>;
 
   // Mutations (Supabase PostgreSQL)
-  updateSettings: (next: MadrasahSettings) => Promise<void>;
-  upsertClass: (item: Omit<MadrasahClass, 'id'> & { id?: string }) => Promise<void>;
+  updateSettings: (next: MadrasahSettings) => Promise<boolean>;
+  upsertClass: (item: Omit<MadrasahClass, 'id'> & { id?: string }) => Promise<boolean>;
   deleteClass: (id: string) => Promise<void>;
-  upsertSubject: (item: Omit<Subject, 'id'> & { id?: string }) => Promise<void>;
+  upsertSubject: (item: Omit<Subject, 'id'> & { id?: string }) => Promise<boolean>;
   deleteSubject: (id: string) => Promise<void>;
-  upsertStudent: (item: Omit<Student, 'id'> & { id?: string }) => Promise<void>;
+  upsertStudent: (item: Omit<Student, 'id'> & { id?: string }) => Promise<boolean>;
   deleteStudent: (id: string) => Promise<void>;
   upsertGrade: (params: {
     student_id: string;
@@ -160,13 +160,27 @@ function translateAuthError(rawMessage?: string): string {
     return 'Email atau kata sandi salah. Periksa kembali data masuk Anda.';
   }
   if (lower.includes('email not confirmed')) {
-    return 'Email akun belum terkonfirmasi. Minta Admin Madrasah mengaktifkan akun atau menonaktifkan konfirmasi email di Supabase.';
+    return 'Email akun belum terkonfirmasi. Minta Admin Madrasah mengaktifkan akun atau menjalankan SQL terbaru di Supabase.';
+  }
+  if (
+    lower.includes('error sending confirmation') ||
+    lower.includes('confirmation mail') ||
+    lower.includes('over_email_send_rate_limit')
+  ) {
+    return 'Batas pengiriman email konfirmasi Supabase tercapai. Jalankan ulang SQL terbaru pada menu Skema SQL & Panduan agar Admin dapat membuat akun langsung tanpa email konfirmasi.';
   }
   if (
     lower.includes('user already registered') ||
-    lower.includes('already exists')
+    lower.includes('already exists') ||
+    lower.includes('sudah terdaftar')
   ) {
     return 'Email tersebut sudah terdaftar pada sistem.';
+  }
+  if (
+    lower.includes('email_address_invalid') ||
+    lower.includes('unable to validate email')
+  ) {
+    return 'Format alamat email tidak valid. Gunakan email yang valid (contoh: nama@madrasah.sch.id).';
   }
   if (
     lower.includes('failed to fetch') ||
@@ -176,7 +190,7 @@ function translateAuthError(rawMessage?: string): string {
     return 'Koneksi jaringan ke Supabase terganggu. Periksa internet Anda lalu coba lagi.';
   }
   if (lower.includes('too many requests') || lower.includes('rate limit')) {
-    return 'Terlalu banyak percobaan masuk. Tunggu beberapa saat sebelum mencoba lagi.';
+    return 'Terlalu banyak percobaan dalam waktu singkat. Tunggu beberapa saat atau jalankan SQL terbaru untuk pembuatan akun langsung.';
   }
   if (lower.includes('password should be at least')) {
     return 'Kata sandi minimal 6 karakter.';
@@ -236,6 +250,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   >(new Map());
   const inflightSavesRef = useRef<number>(0);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
 
   const syncPendingSavesCount = useCallback(() => {
     setPendingSavesCount(
@@ -332,77 +347,87 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const client = getSupabaseClient();
     if (!client) return;
 
-    setDataLoading(true);
-    try {
-      const [
-        settingsRes,
-        classesRes,
-        subjectsRes,
-        studentsRes,
-        gradesRes,
-        nonAcadRes,
-        profilesRes,
-      ] = await Promise.all([
-        client.from('madrasah_settings').select('*').limit(1),
-        client.from('classes').select('*').order('level', { ascending: true }),
-        client.from('subjects').select('*').order('sort_order', { ascending: true }),
-        client.from('students').select('*').order('full_name', { ascending: true }),
-        client.from('grades').select('*'),
-        client.from('non_academic_records').select('*'),
-        client.from('profiles').select('*').order('full_name', { ascending: true }),
-      ]);
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
 
-      if (settingsRes.error) throw settingsRes.error;
-      if (classesRes.error) throw classesRes.error;
-      if (subjectsRes.error) throw subjectsRes.error;
-      if (studentsRes.error) throw studentsRes.error;
-      if (gradesRes.error) throw gradesRes.error;
-      if (nonAcadRes.error) throw nonAcadRes.error;
+    const run = (async () => {
+      setDataLoading(true);
+      try {
+        const [
+          settingsRes,
+          classesRes,
+          subjectsRes,
+          studentsRes,
+          gradesRes,
+          nonAcadRes,
+          profilesRes,
+        ] = await Promise.all([
+          client.from('madrasah_settings').select('*').limit(1),
+          client.from('classes').select('*').order('level', { ascending: true }),
+          client.from('subjects').select('*').order('sort_order', { ascending: true }),
+          client.from('students').select('*').order('full_name', { ascending: true }),
+          client.from('grades').select('*'),
+          client.from('non_academic_records').select('*'),
+          client.from('profiles').select('*').order('full_name', { ascending: true }),
+        ]);
 
-      if (settingsRes.data && settingsRes.data.length > 0) {
-        setSettings(settingsRes.data[0] as MadrasahSettings);
-      }
-      if (classesRes.data) {
-        const clsList = classesRes.data as MadrasahClass[];
-        setClasses(clsList);
-        if (clsList.length > 0) {
-          setSelectedClassId((prev) =>
-            clsList.some((c) => c.id === prev) ? prev : clsList[0].id
+        if (settingsRes.error) throw settingsRes.error;
+        if (classesRes.error) throw classesRes.error;
+        if (subjectsRes.error) throw subjectsRes.error;
+        if (studentsRes.error) throw studentsRes.error;
+        if (gradesRes.error) throw gradesRes.error;
+        if (nonAcadRes.error) throw nonAcadRes.error;
+
+        if (settingsRes.data && settingsRes.data.length > 0) {
+          setSettings(settingsRes.data[0] as MadrasahSettings);
+        }
+        if (classesRes.data) {
+          const clsList = classesRes.data as MadrasahClass[];
+          setClasses(clsList);
+          if (clsList.length > 0) {
+            setSelectedClassId((prev) =>
+              clsList.some((c) => c.id === prev) ? prev : clsList[0].id
+            );
+          }
+        }
+        if (subjectsRes.data) {
+          setSubjects(subjectsRes.data as Subject[]);
+        }
+        if (studentsRes.data) {
+          setStudents(studentsRes.data as Student[]);
+        }
+        if (gradesRes.data) {
+          setGrades(
+            gradesRes.data.map((g) => ({
+              ...g,
+              formatif: Number(g.formatif),
+              pts: Number(g.pts),
+              pas: Number(g.pas),
+              praktik: Number(g.praktik),
+              final_score: Number(g.final_score),
+            })) as GradeRecord[]
           );
         }
-      }
-      if (subjectsRes.data) {
-        setSubjects(subjectsRes.data as Subject[]);
-      }
-      if (studentsRes.data) {
-        setStudents(studentsRes.data as Student[]);
-      }
-      if (gradesRes.data) {
-        setGrades(
-          gradesRes.data.map((g) => ({
-            ...g,
-            formatif: Number(g.formatif),
-            pts: Number(g.pts),
-            pas: Number(g.pas),
-            praktik: Number(g.praktik),
-            final_score: Number(g.final_score),
-          })) as GradeRecord[]
+        if (nonAcadRes.data) {
+          setNonAcademics(nonAcadRes.data as NonAcademicRecord[]);
+        }
+        if (!profilesRes.error && profilesRes.data) {
+          setSupabaseProfiles(profilesRes.data as UserProfile[]);
+        }
+      } catch (err) {
+        pushToast(
+          'error',
+          `Gagal memuat data Supabase: ${err instanceof Error ? err.message : 'Periksa skema SQL & kebijakan RLS'}`
         );
+      } finally {
+        setDataLoading(false);
+        refreshPromiseRef.current = null;
       }
-      if (nonAcadRes.data) {
-        setNonAcademics(nonAcadRes.data as NonAcademicRecord[]);
-      }
-      if (!profilesRes.error && profilesRes.data) {
-        setSupabaseProfiles(profilesRes.data as UserProfile[]);
-      }
-    } catch (err) {
-      pushToast(
-        'error',
-        `Gagal memuat data Supabase: ${err instanceof Error ? err.message : 'Periksa skema SQL & kebijakan RLS'}`
-      );
-    } finally {
-      setDataLoading(false);
-    }
+    })();
+
+    refreshPromiseRef.current = run;
+    return run;
   }, [pushToast]);
 
   useEffect(() => {
@@ -668,55 +693,168 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     fullName: string;
     role: UserRole;
     options?: SignUpExtraOptions;
-  }): Promise<boolean> => {
+  }): Promise<{ ok: boolean; error?: string }> => {
     if (userProfile?.role !== 'admin') {
-      pushToast('error', 'Hanya Admin yang dapat membuat akun pengguna.');
-      return false;
+      const msg = 'Hanya Admin yang dapat membuat akun pengguna.';
+      pushToast('error', msg);
+      return { ok: false, error: msg };
     }
 
-    const ephemeral = createEphemeralSupabaseClient();
-    if (!ephemeral) {
-      pushToast('error', 'Hubungkan proyek Supabase terlebih dahulu.');
-      return false;
+    const client = getSupabaseClient();
+    if (!client) {
+      const msg = 'Hubungkan proyek Supabase terlebih dahulu.';
+      pushToast('error', msg);
+      return { ok: false, error: msg };
     }
 
     const cleanEmail = email.trim().toLowerCase();
+    const cleanName = fullName.trim();
+    const cleanClassId =
+      role === 'wali_kelas' && options?.assignedClassId
+        ? options.assignedClassId
+        : null;
+    const cleanSubjectIds =
+      role === 'guru' ? options?.assignedSubjectIds || [] : [];
+    const cleanStudentNis =
+      role === 'orang_tua' ? (options?.linkedStudentNis || '').trim() : '';
+
+    // Jalur utama & instan: RPC SECURITY DEFINER langsung ke auth.users + public.profiles (tanpa email SMTP / rate limit)
+    const { data: rpcProfile, error: rpcError } = await client.rpc(
+      'admin_create_user_account',
+      {
+        p_email: cleanEmail,
+        p_password: password,
+        p_full_name: cleanName,
+        p_role: role,
+        p_assigned_class_id: cleanClassId,
+        p_assigned_subject_ids: cleanSubjectIds,
+        p_linked_student_nis: cleanStudentNis,
+      }
+    );
+
+    if (!rpcError && rpcProfile) {
+      const created = (
+        Array.isArray(rpcProfile) ? rpcProfile[0] : rpcProfile
+      ) as UserProfile;
+      if (created?.id) {
+        setSupabaseProfiles((prev) => {
+          const next = [...prev.filter((p) => p.id !== created.id), created];
+          next.sort((a, b) => a.full_name.localeCompare(b.full_name));
+          return next;
+        });
+      }
+      pushToast(
+        'success',
+        `Akun "${cleanName}" (${cleanEmail}) berhasil dibuat dan langsung aktif.`
+      );
+      return { ok: true };
+    }
+
+    const rpcMsg = rpcError?.message || '';
+    const isMissingRpc =
+      rpcError?.code === 'PGRST202' ||
+      rpcMsg.includes('admin_create_user_account') ||
+      rpcMsg.includes('schema cache');
+
+    if (rpcError && !isMissingRpc) {
+      const translated = translateAuthError(rpcMsg);
+      pushToast('error', `Gagal membuat akun: ${translated}`);
+      return { ok: false, error: translated };
+    }
+
+    // Fallback jika SQL RPC terbaru belum dijalankan di Supabase SQL Editor
+    const ephemeral = createEphemeralSupabaseClient();
+    if (!ephemeral) {
+      const msg = 'Hubungkan proyek Supabase terlebih dahulu.';
+      pushToast('error', msg);
+      return { ok: false, error: msg };
+    }
+
     const { data, error } = await ephemeral.auth.signUp({
       email: cleanEmail,
       password,
       options: {
         data: {
-          full_name: fullName.trim(),
+          full_name: cleanName,
           role,
-          assigned_class_id:
-            role === 'wali_kelas' ? options?.assignedClassId || '' : '',
-          assigned_subject_ids:
-            role === 'guru' ? options?.assignedSubjectIds || [] : [],
-          linked_student_nis:
-            role === 'orang_tua' ? (options?.linkedStudentNis || '').trim() : '',
+          assigned_class_id: cleanClassId || '',
+          assigned_subject_ids: cleanSubjectIds,
+          linked_student_nis: cleanStudentNis,
         },
       },
     });
 
     if (error) {
-      pushToast(
-        'error',
-        `Gagal membuat akun: ${translateAuthError(error.message)}`
-      );
-      return false;
+      const translated = translateAuthError(error.message);
+      pushToast('error', `Gagal membuat akun: ${translated}`);
+      return { ok: false, error: translated };
     }
 
-    // Tunggu sebentar agar trigger handle_new_user selesai membuat baris profiles
-    await new Promise((r) => setTimeout(r, 450));
-    await refreshFromSupabase();
+    if (
+      data.user &&
+      Array.isArray(data.user.identities) &&
+      data.user.identities.length === 0
+    ) {
+      const msg = 'Email tersebut sudah terdaftar pada sistem.';
+      pushToast('error', msg);
+      return { ok: false, error: msg };
+    }
 
     if (data.user) {
-      pushToast(
-        'success',
-        `Akun "${fullName.trim()}" (${cleanEmail}) berhasil dibuat.`
-      );
+      const matchedStudent =
+        role === 'orang_tua' && cleanStudentNis
+          ? students.find(
+              (s) => s.nis.trim().toLowerCase() === cleanStudentNis.toLowerCase()
+            )
+          : undefined;
+
+      const { data: syncedProfile } = await client
+        .from('profiles')
+        .upsert(
+          {
+            id: data.user.id,
+            email: cleanEmail,
+            full_name: cleanName,
+            role,
+            assigned_class_id: cleanClassId,
+            assigned_subject_ids: cleanSubjectIds,
+            linked_student_id: matchedStudent?.id || null,
+            linked_student_nis: cleanStudentNis,
+          },
+          { onConflict: 'id' }
+        )
+        .select('*')
+        .maybeSingle();
+
+      if (syncedProfile) {
+        const profileRow = syncedProfile as UserProfile;
+        setSupabaseProfiles((prev) => {
+          const next = [
+            ...prev.filter((p) => p.id !== profileRow.id),
+            profileRow,
+          ];
+          next.sort((a, b) => a.full_name.localeCompare(b.full_name));
+          return next;
+        });
+      }
+
+      if (!data.user.email_confirmed_at && !data.session) {
+        pushToast(
+          'info',
+          `Akun "${cleanName}" dibuat, tetapi email masih menunggu konfirmasi Supabase. Jalankan SQL terbaru di Skema SQL & Panduan agar akun baru langsung aktif.`
+        );
+      } else {
+        pushToast(
+          'success',
+          `Akun "${cleanName}" (${cleanEmail}) berhasil dibuat.`
+        );
+      }
+      return { ok: true };
     }
-    return true;
+
+    const unknownErr = 'Gagal membuat akun. Periksa kembali skema SQL Supabase.';
+    pushToast('error', unknownErr);
+    return { ok: false, error: unknownErr };
   };
 
   const signOut = async () => {
@@ -737,9 +875,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     pushToast('info', 'Anda telah keluar dari sesi aplikasi.');
   };
 
-  const updateSupabaseProfileRole = async (profile: UserProfile) => {
+  const updateSupabaseProfileRole = async (
+    profile: UserProfile
+  ): Promise<boolean> => {
     const client = getSupabaseClient();
-    if (!client) return;
+    if (!client) return false;
 
     let linkedStudentId = profile.linked_student_id || null;
     if (profile.role === 'orang_tua' && profile.linked_student_nis) {
@@ -753,7 +893,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       linkedStudentId = null;
     }
 
-    const { error } = await client
+    const { data, error } = await client
       .from('profiles')
       .update({
         full_name: profile.full_name,
@@ -767,14 +907,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         linked_student_nis:
           profile.role === 'orang_tua' ? profile.linked_student_nis || '' : '',
       })
-      .eq('id', profile.id);
+      .eq('id', profile.id)
+      .select('*')
+      .single();
 
     if (error) {
       pushToast('error', `Gagal memperbarui peran: ${error.message}`);
-      return;
+      return false;
     }
-    await refreshFromSupabase();
+
+    if (data) {
+      const updated = data as UserProfile;
+      setSupabaseProfiles((prev) => {
+        const next = prev.map((p) => (p.id === updated.id ? updated : p));
+        next.sort((a, b) => a.full_name.localeCompare(b.full_name));
+        return next;
+      });
+      if (userProfile?.id === updated.id) {
+        setUserProfile(updated);
+      }
+    }
     pushToast('success', `Peran pengguna "${profile.full_name}" diperbarui.`);
+    return true;
   };
 
   const adminUpdateUserPassword = async (
@@ -868,7 +1022,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
-    await refreshFromSupabase();
+    setSupabaseProfiles((prev) => prev.filter((p) => p.id !== userId));
     pushToast(
       'success',
       `Akun "${fullName || 'pengguna'}" berhasil dihapus permanen.`
@@ -1123,67 +1277,79 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // ==================== MUTATIONS (ONLINE SUPABASE) ====================
 
-  const updateSettings = async (next: MadrasahSettings) => {
+  const updateSettings = async (next: MadrasahSettings): Promise<boolean> => {
     const client = getSupabaseClient();
-    if (!client) return;
+    if (!client) return false;
 
     const { id, ...rest } = next;
     if (id && id !== 'settings-default') {
-      const { error } = await client
+      const { data, error } = await client
         .from('madrasah_settings')
         .update(rest)
-        .eq('id', id);
+        .eq('id', id)
+        .select('*')
+        .single();
       if (error) {
         pushToast('error', `Gagal menyimpan pengaturan: ${error.message}`);
-        return;
+        return false;
       }
+      if (data) setSettings(data as MadrasahSettings);
     } else {
-      const { error } = await client.from('madrasah_settings').insert(rest);
+      const { data, error } = await client
+        .from('madrasah_settings')
+        .insert(rest)
+        .select('*')
+        .single();
       if (error) {
         pushToast('error', `Gagal menyimpan pengaturan: ${error.message}`);
-        return;
+        return false;
       }
+      if (data) setSettings(data as MadrasahSettings);
     }
-    await refreshFromSupabase();
     pushToast('success', 'Pengaturan madrasah & bobot nilai disimpan ke Supabase.');
+    return true;
   };
 
   const upsertClass = async (
     item: Omit<MadrasahClass, 'id'> & { id?: string }
-  ) => {
+  ): Promise<boolean> => {
     const client = getSupabaseClient();
-    if (!client) return;
+    if (!client) return false;
 
-    if (item.id) {
-      const { error } = await client
-        .from('classes')
-        .update({
-          name: item.name,
-          level: item.level,
-          academic_year: item.academic_year,
-          wali_kelas_name: item.wali_kelas_name,
-          wali_kelas_nip: item.wali_kelas_nip,
-        })
-        .eq('id', item.id);
-      if (error) {
-        pushToast('error', error.message);
-        return;
-      }
-    } else {
-      const { error } = await client.from('classes').insert({
-        name: item.name,
-        level: item.level,
-        academic_year: item.academic_year,
-        wali_kelas_name: item.wali_kelas_name,
-        wali_kelas_nip: item.wali_kelas_nip,
-      });
-      if (error) {
-        pushToast('error', error.message);
-        return;
-      }
+    const payload = {
+      name: item.name,
+      level: item.level,
+      academic_year: item.academic_year,
+      wali_kelas_name: item.wali_kelas_name,
+      wali_kelas_nip: item.wali_kelas_nip,
+    };
+
+    const { data, error } = item.id
+      ? await client
+          .from('classes')
+          .update(payload)
+          .eq('id', item.id)
+          .select('*')
+          .single()
+      : await client.from('classes').insert(payload).select('*').single();
+
+    if (error) {
+      pushToast('error', error.message);
+      return false;
     }
-    await refreshFromSupabase();
+
+    if (data) {
+      const saved = data as MadrasahClass;
+      setClasses((prev) => {
+        const next = item.id
+          ? prev.map((c) => (c.id === saved.id ? saved : c))
+          : [...prev, saved];
+        next.sort((a, b) => a.level - b.level);
+        return next;
+      });
+    }
     pushToast('success', 'Data kelas berhasil disimpan ke Supabase.');
+    return true;
   };
 
   const deleteClass = async (id: string) => {
@@ -1203,48 +1369,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       pushToast('error', error.message);
       return;
     }
-    await refreshFromSupabase();
+    setClasses((prev) => prev.filter((c) => c.id !== id));
     pushToast('success', 'Kelas dihapus dari Supabase.');
   };
 
-  const upsertSubject = async (item: Omit<Subject, 'id'> & { id?: string }) => {
+  const upsertSubject = async (
+    item: Omit<Subject, 'id'> & { id?: string }
+  ): Promise<boolean> => {
     const client = getSupabaseClient();
-    if (!client) return;
+    if (!client) return false;
 
-    if (item.id) {
-      const { error } = await client
-        .from('subjects')
-        .update({
-          code: item.code,
-          name: item.name,
-          arabic_name: item.arabic_name,
-          teacher_name: item.teacher_name,
-          category: item.category,
-          kkm: item.kkm,
-          sort_order: item.sort_order,
-        })
-        .eq('id', item.id);
-      if (error) {
-        pushToast('error', error.message);
-        return;
-      }
-    } else {
-      const { error } = await client.from('subjects').insert({
-        code: item.code,
-        name: item.name,
-        arabic_name: item.arabic_name,
-        teacher_name: item.teacher_name,
-        category: item.category,
-        kkm: item.kkm,
-        sort_order: item.sort_order,
-      });
-      if (error) {
-        pushToast('error', error.message);
-        return;
-      }
+    const payload = {
+      code: item.code,
+      name: item.name,
+      arabic_name: item.arabic_name,
+      teacher_name: item.teacher_name,
+      category: item.category,
+      kkm: item.kkm,
+      sort_order: item.sort_order,
+    };
+
+    const { data, error } = item.id
+      ? await client
+          .from('subjects')
+          .update(payload)
+          .eq('id', item.id)
+          .select('*')
+          .single()
+      : await client.from('subjects').insert(payload).select('*').single();
+
+    if (error) {
+      pushToast('error', error.message);
+      return false;
     }
-    await refreshFromSupabase();
+
+    if (data) {
+      const saved = data as Subject;
+      setSubjects((prev) => {
+        const next = item.id
+          ? prev.map((s) => (s.id === saved.id ? saved : s))
+          : [...prev, saved];
+        next.sort((a, b) => a.sort_order - b.sort_order);
+        return next;
+      });
+    }
     pushToast('success', 'Data mata pelajaran & KKM disimpan ke Supabase.');
+    return true;
   };
 
   const deleteSubject = async (id: string) => {
@@ -1256,13 +1426,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       pushToast('error', error.message);
       return;
     }
-    await refreshFromSupabase();
+    setSubjects((prev) => prev.filter((s) => s.id !== id));
     pushToast('success', 'Mata pelajaran dihapus.');
   };
 
-  const upsertStudent = async (item: Omit<Student, 'id'> & { id?: string }) => {
+  const upsertStudent = async (
+    item: Omit<Student, 'id'> & { id?: string }
+  ): Promise<boolean> => {
     const client = getSupabaseClient();
-    if (!client) return;
+    if (!client) return false;
 
     const payload = {
       nis: item.nis,
@@ -1276,24 +1448,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       class_id: item.class_id,
       status: item.status,
     };
-    if (item.id) {
-      const { error } = await client
-        .from('students')
-        .update(payload)
-        .eq('id', item.id);
-      if (error) {
-        pushToast('error', error.message);
-        return;
-      }
-    } else {
-      const { error } = await client.from('students').insert(payload);
-      if (error) {
-        pushToast('error', error.message);
-        return;
-      }
+
+    const { data, error } = item.id
+      ? await client
+          .from('students')
+          .update(payload)
+          .eq('id', item.id)
+          .select('*')
+          .single()
+      : await client.from('students').insert(payload).select('*').single();
+
+    if (error) {
+      pushToast('error', error.message);
+      return false;
     }
-    await refreshFromSupabase();
+
+    if (data) {
+      const saved = data as Student;
+      setStudents((prev) => {
+        const next = item.id
+          ? prev.map((s) => (s.id === saved.id ? saved : s))
+          : [...prev, saved];
+        next.sort((a, b) => a.full_name.localeCompare(b.full_name));
+        return next;
+      });
+    }
     pushToast('success', 'Data santri berhasil disimpan ke Supabase.');
+    return true;
   };
 
   const deleteStudent = async (id: string) => {
@@ -1305,7 +1486,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       pushToast('error', error.message);
       return;
     }
-    await refreshFromSupabase();
+    setStudents((prev) => prev.filter((s) => s.id !== id));
     pushToast('success', 'Data santri dihapus.');
   };
 
@@ -1526,103 +1707,124 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const nisToStudentId = new Map<string, string>();
     students.forEach((s) => nisToStudentId.set(s.nis, s.id));
 
+    // Batch upsert seluruh santri sekaligus (jauh lebih cepat dibanding per-baris)
+    const dedupedStudentsMap = new Map<string, Record<string, unknown>>();
     for (const st of params.newStudents) {
-      const { data: upserted, error } = await client
+      dedupedStudentsMap.set(st.nis.trim(), {
+        nis: st.nis.trim(),
+        nisn: st.nisn,
+        full_name: st.full_name,
+        birth_place: st.birth_place,
+        birth_date: st.birth_date || null,
+        gender: st.gender,
+        parent_name: st.parent_name,
+        address: st.address,
+        class_id: params.targetClassId,
+        status: st.status,
+      });
+    }
+    const studentPayloads = Array.from(dedupedStudentsMap.values());
+    if (studentPayloads.length > 0) {
+      const { data: upsertedList, error: stErr } = await client
         .from('students')
-        .upsert(
-          {
-            nis: st.nis,
-            nisn: st.nisn,
-            full_name: st.full_name,
-            birth_place: st.birth_place,
-            birth_date: st.birth_date || null,
-            gender: st.gender,
-            parent_name: st.parent_name,
-            address: st.address,
-            class_id: params.targetClassId,
-            status: st.status,
-          },
-          { onConflict: 'nis' }
-        )
-        .select('id, nis')
-        .single();
-      if (!error && upserted) {
-        nisToStudentId.set(upserted.nis, upserted.id);
-        importedStudents++;
+        .upsert(studentPayloads, { onConflict: 'nis' })
+        .select('id, nis');
+      if (stErr) {
+        pushToast('error', `Gagal import data santri: ${stErr.message}`);
+      } else if (upsertedList) {
+        upsertedList.forEach((u) => nisToStudentId.set(u.nis, u.id));
+        importedStudents = upsertedList.length;
       }
     }
 
-    const gradePayloads = params.newGrades
-      .map((g) => {
-        const stId = nisToStudentId.get(g.studentNis);
-        const subj = subjects.find((s) => s.id === g.subjectId);
-        if (!stId || !subj) return null;
-        const finalScore = calculateFinalScore(
-          g.formatif,
-          g.pts,
-          g.pas,
-          g.praktik,
-          settings
-        );
-        const pred = getPredicate(finalScore, subj.kkm);
-        return {
-          student_id: stId,
-          subject_id: subj.id,
-          class_id: params.targetClassId,
-          academic_year: settings.tahun_pelajaran,
-          semester: settings.semester,
-          formatif: g.formatif,
-          pts: g.pts,
-          pas: g.pas,
-          praktik: g.praktik,
-          final_score: finalScore,
-          predicate: g.predicateOverride || pred.letter,
-          description:
-            g.descriptionOverride ||
-            generateCompetencyDescription(
-              subj.name,
-              finalScore,
-              subj.kkm,
-              subj.category
-            ),
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => row !== null);
+    const gradeMap = new Map<
+      string,
+      {
+        student_id: string;
+        subject_id: string;
+        class_id: string;
+        academic_year: string;
+        semester: 'Ganjil' | 'Genap';
+        formatif: number;
+        pts: number;
+        pas: number;
+        praktik: number;
+        final_score: number;
+        predicate: string;
+        description: string;
+      }
+    >();
 
+    for (const g of params.newGrades) {
+      const stId = nisToStudentId.get(g.studentNis);
+      const subj = subjects.find((s) => s.id === g.subjectId);
+      if (!stId || !subj) continue;
+      const finalScore = calculateFinalScore(
+        g.formatif,
+        g.pts,
+        g.pas,
+        g.praktik,
+        settings
+      );
+      const pred = getPredicate(finalScore, subj.kkm);
+      gradeMap.set(`${stId}::${subj.id}`, {
+        student_id: stId,
+        subject_id: subj.id,
+        class_id: params.targetClassId,
+        academic_year: settings.tahun_pelajaran,
+        semester: settings.semester,
+        formatif: g.formatif,
+        pts: g.pts,
+        pas: g.pas,
+        praktik: g.praktik,
+        final_score: finalScore,
+        predicate: g.predicateOverride || pred.letter,
+        description:
+          g.descriptionOverride ||
+          generateCompetencyDescription(
+            subj.name,
+            finalScore,
+            subj.kkm,
+            subj.category
+          ),
+      });
+    }
+
+    const gradePayloads = Array.from(gradeMap.values());
     if (gradePayloads.length > 0) {
       const { error } = await client.from('grades').upsert(gradePayloads, {
         onConflict: 'student_id,subject_id,academic_year,semester',
       });
       if (!error) importedGrades = gradePayloads.length;
+      else pushToast('error', `Gagal import sebagian nilai: ${error.message}`);
     }
 
-    const nonAcadPayloads = params.attendanceUpdates
-      .map((att) => {
-        const stId = nisToStudentId.get(att.studentNis);
-        if (!stId) return null;
-        return {
-          student_id: stId,
-          class_id: params.targetClassId,
-          academic_year: settings.tahun_pelajaran,
-          semester: settings.semester,
-          sikap_spiritual_angka: att.asScore ?? 82,
-          sikap_spiritual: 'Berkembang Sesuai Harapan',
-          akhlak_catatan:
-            'Siswa memiliki sikap yang berkembang sesuai harapan dalam nilai religious meliputi beriman, bertaqwa, bersih, toleransi, dan cinta lingkungan',
-          sikap_sosial_angka: att.assScore ?? 82,
-          sikap_sosial: 'Berkembang Sesuai Harapan',
-          sosial_catatan:
-            'Siswa memiliki sikap berkembang sesuai harapan dalam melakukan interaksi dengan teman dan lingkungannya',
-          sakit: att.sakit,
-          izin: att.izin,
-          alpa: att.alpa,
-          catatan_wali:
-            att.pesanWalas ||
-            'Ananda mengikuti pembelajaran dengan baik dan menunjukkan sikap yang sopan. Semoga terus meningkatkan semangat belajar.',
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => row !== null);
-
+    const nonAcadMap = new Map<string, Record<string, unknown>>();
+    for (const att of params.attendanceUpdates) {
+      const stId = nisToStudentId.get(att.studentNis);
+      if (!stId) continue;
+      nonAcadMap.set(stId, {
+        student_id: stId,
+        class_id: params.targetClassId,
+        academic_year: settings.tahun_pelajaran,
+        semester: settings.semester,
+        sikap_spiritual_angka: att.asScore ?? 82,
+        sikap_spiritual: 'Berkembang Sesuai Harapan',
+        akhlak_catatan:
+          'Siswa memiliki sikap yang berkembang sesuai harapan dalam nilai religious meliputi beriman, bertaqwa, bersih, toleransi, dan cinta lingkungan',
+        sikap_sosial_angka: att.assScore ?? 82,
+        sikap_sosial: 'Berkembang Sesuai Harapan',
+        sosial_catatan:
+          'Siswa memiliki sikap berkembang sesuai harapan dalam melakukan interaksi dengan teman dan lingkungannya',
+        sakit: att.sakit,
+        izin: att.izin,
+        alpa: att.alpa,
+        catatan_wali:
+          att.pesanWalas ||
+          'Ananda mengikuti pembelajaran dengan baik dan menunjukkan sikap yang sopan. Semoga terus meningkatkan semangat belajar.',
+      });
+    }
+    const nonAcadPayloads = Array.from(nonAcadMap.values());
     if (nonAcadPayloads.length > 0) {
       await client
         .from('non_academic_records')
