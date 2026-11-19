@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Check,
   Copy,
   Database,
@@ -28,6 +29,19 @@ import schemaSqlRaw from '../../supabase/schema.sql?raw';
 
 type SettingsSubTab = 'madrasah' | 'accounts' | 'supabase' | 'sql-guide';
 
+const RPC_START_MARKER = '-- Admin RPC: Buat akun pengguna baru';
+const RPC_END_MARKER = '-- Policies Profiles';
+
+const ACCOUNT_ACTIVATION_SQL = (() => {
+  const startIdx = schemaSqlRaw.indexOf(RPC_START_MARKER);
+  const endIdx = schemaSqlRaw.indexOf(RPC_END_MARKER);
+  if (startIdx !== -1 && endIdx > startIdx) {
+    const rpcSection = schemaSqlRaw.slice(startIdx, endIdx).trim();
+    return `create extension if not exists "pgcrypto";\n\n${rpcSection}\n\nnotify pgrst, 'reload schema';\n`;
+  }
+  return schemaSqlRaw;
+})();
+
 export function SettingsAndSupabaseView() {
   const {
     settings,
@@ -41,6 +55,8 @@ export function SettingsAndSupabaseView() {
     userProfile,
     supabaseProfiles,
     dataLoading,
+    isAccountRpcReady,
+    checkAccountRpcAvailability,
     signOut,
     adminCreateUserAccount,
     updateSupabaseProfileRole,
@@ -69,6 +85,9 @@ export function SettingsAndSupabaseView() {
   const [showAccountPassword, setShowAccountPassword] = useState(false);
   const [savingAccount, setSavingAccount] = useState(false);
   const [accountModalError, setAccountModalError] = useState('');
+  const [accountNeedsSql, setAccountNeedsSql] = useState(false);
+  const [copiedActivationSql, setCopiedActivationSql] = useState(false);
+  const [checkingRpc, setCheckingRpc] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState<UserProfile | null>(null);
   const [deletingLoading, setDeletingLoading] = useState(false);
@@ -140,9 +159,49 @@ export function SettingsAndSupabaseView() {
     URL.revokeObjectURL(url);
   };
 
+  const handleCopyActivationSql = async () => {
+    try {
+      await navigator.clipboard.writeText(ACCOUNT_ACTIVATION_SQL);
+      setCopiedActivationSql(true);
+      pushToast(
+        'success',
+        'SQL Aktivasi Akun Instan disalin! Paste dan Run di SQL Editor Supabase.'
+      );
+      setTimeout(() => setCopiedActivationSql(false), 3000);
+    } catch {
+      pushToast(
+        'error',
+        'Gagal menyalin otomatis. Buka tab Skema SQL & Panduan untuk menyalin manual.'
+      );
+    }
+  };
+
+  const handleCheckRpcStatus = async () => {
+    setCheckingRpc(true);
+    try {
+      const ready = await checkAccountRpcAvailability();
+      if (ready) {
+        setAccountNeedsSql(false);
+        setAccountModalError('');
+        pushToast(
+          'success',
+          'SQL Aktivasi Akun sudah aktif! Anda sekarang bisa membuat akun tanpa batas.'
+        );
+      } else {
+        pushToast(
+          'info',
+          'Fungsi SQL akun belum terdeteksi di Supabase. Pastikan SQL Aktivasi sudah di-Run di SQL Editor.'
+        );
+      }
+    } finally {
+      setCheckingRpc(false);
+    }
+  };
+
   const handleSaveAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setAccountModalError('');
+    setAccountNeedsSql(false);
     if (
       !editingAccount?.email?.trim() ||
       !editingAccount.full_name?.trim() ||
@@ -184,8 +243,9 @@ export function SettingsAndSupabaseView() {
             accountPassword
           );
           if (!pwdOk) {
+            setAccountNeedsSql(true);
             setAccountModalError(
-              'Peran berhasil disimpan, tetapi gagal memperbarui kata sandi. Pastikan SQL terbaru sudah dijalankan.'
+              'Peran berhasil disimpan, tetapi gagal memperbarui kata sandi. Pastikan SQL Aktivasi Akun terbaru sudah dijalankan di Supabase.'
             );
             return;
           }
@@ -195,6 +255,7 @@ export function SettingsAndSupabaseView() {
         setAccountPassword('');
         setShowAccountPassword(false);
         setAccountModalError('');
+        setAccountNeedsSql(false);
       } else {
         if (accountPassword.length < 6) {
           const msg = 'Kata sandi awal minimal 6 karakter.';
@@ -219,8 +280,12 @@ export function SettingsAndSupabaseView() {
           setAccountPassword('');
           setShowAccountPassword(false);
           setAccountModalError('');
-        } else if (res.error) {
-          setAccountModalError(res.error);
+          setAccountNeedsSql(false);
+        } else {
+          setAccountNeedsSql(Boolean(res.needsSqlSetup));
+          if (res.error) {
+            setAccountModalError(res.error);
+          }
         }
       }
     } finally {
@@ -767,21 +832,22 @@ export function SettingsAndSupabaseView() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setEditingAccount({
-                    role: 'guru',
-                    full_name: '',
-                    email: '',
-                    nip_nuptk: '-',
-                    assigned_class_id: classes[0]?.id || '',
-                    assigned_subject_ids: [],
-                    linked_student_nis: '',
-                  });
-                  setAccountPassword('');
-                  setShowAccountPassword(false);
-                  setAccountModalError('');
-                  setAccountModalOpen(true);
-                }}
+                  onClick={() => {
+                    setEditingAccount({
+                      role: 'guru',
+                      full_name: '',
+                      email: '',
+                      nip_nuptk: '-',
+                      assigned_class_id: classes[0]?.id || '',
+                      assigned_subject_ids: [],
+                      linked_student_nis: '',
+                    });
+                    setAccountPassword('');
+                    setShowAccountPassword(false);
+                    setAccountModalError('');
+                    setAccountNeedsSql(false);
+                    setAccountModalOpen(true);
+                  }}
                 className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 whitespace-nowrap shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -789,6 +855,61 @@ export function SettingsAndSupabaseView() {
               </button>
             </div>
           </div>
+
+          {isAccountRpcReady === false && (
+            <div className="mx-5 mt-5 p-4 rounded-xl border border-amber-300 bg-amber-50/90 text-amber-950 space-y-2.5">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div className="space-y-1 text-xs leading-relaxed">
+                  <div className="font-semibold text-sm text-amber-950">
+                    Aktifkan Pembuatan Akun Instan (Bebas Batas 2 Akun/Jam)
+                  </div>
+                  <p className="text-amber-900">
+                    Saat ini fungsi SQL{' '}
+                    <span className="font-mono font-semibold">
+                      admin_create_user_account
+                    </span>{' '}
+                    belum dijalankan di database Supabase Anda, sehingga pembuatan akun otomatis memakai pendaftaran email standar Supabase yang dibatasi{' '}
+                    <strong>maksimal 2 akun per jam</strong> dan sering gagal jika membuat banyak akun.
+                  </p>
+                  <p className="text-amber-900">
+                    <strong>Cara mengatasi (cukup 1 kali):</strong> Klik{' '}
+                    <strong>Salin SQL Aktivasi Akun</strong> di bawah → buka{' '}
+                    <strong>Dashboard Supabase → SQL Editor → New Query</strong>{' '}
+                    → Paste &amp; klik <strong>Run</strong> → lalu kembali klik{' '}
+                    <strong>Cek Status SQL</strong>.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pl-6">
+                <button
+                  type="button"
+                  onClick={handleCopyActivationSql}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-amber-800 rounded-lg hover:bg-amber-900 whitespace-nowrap"
+                >
+                  {copiedActivationSql ? (
+                    <Check className="w-3.5 h-3.5" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  {copiedActivationSql
+                    ? 'SQL Aktivasi Tersalin'
+                    : 'Salin SQL Aktivasi Akun'}
+                </button>
+                <button
+                  type="button"
+                  disabled={checkingRpc}
+                  onClick={handleCheckRpcStatus}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 disabled:opacity-60 whitespace-nowrap"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${checkingRpc ? 'animate-spin' : ''}`}
+                  />
+                  {checkingRpc ? 'Memeriksa...' : 'Cek Status SQL'}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
@@ -847,6 +968,7 @@ export function SettingsAndSupabaseView() {
                                 setAccountPassword('');
                                 setShowAccountPassword(false);
                                 setAccountModalError('');
+                                setAccountNeedsSql(false);
                                 setAccountModalOpen(true);
                               }}
                               title={`Edit profil & kata sandi ${acc.full_name}`}
@@ -1358,8 +1480,37 @@ export function SettingsAndSupabaseView() {
               )}
 
               {accountModalError && (
-                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed">
-                  {accountModalError}
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed space-y-2.5">
+                  <div>{accountModalError}</div>
+                  {(accountNeedsSql || isAccountRpcReady === false) && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-red-200/80">
+                      <button
+                        type="button"
+                        onClick={handleCopyActivationSql}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-red-700 rounded-md hover:bg-red-800 whitespace-nowrap"
+                      >
+                        {copiedActivationSql ? (
+                          <Check className="w-3 h-3" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        {copiedActivationSql
+                          ? 'SQL Tersalin'
+                          : 'Salin SQL Aktivasi Akun'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={checkingRpc}
+                        onClick={handleCheckRpcStatus}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-red-900 bg-white border border-red-300 rounded-md hover:bg-red-100 disabled:opacity-60 whitespace-nowrap"
+                      >
+                        <RefreshCw
+                          className={`w-3 h-3 ${checkingRpc ? 'animate-spin' : ''}`}
+                        />
+                        {checkingRpc ? 'Memeriksa...' : 'Cek Status SQL'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1373,6 +1524,7 @@ export function SettingsAndSupabaseView() {
                     setAccountPassword('');
                     setShowAccountPassword(false);
                     setAccountModalError('');
+                    setAccountNeedsSql(false);
                   }}
                   className="px-4 py-2 text-sm font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50"
                 >

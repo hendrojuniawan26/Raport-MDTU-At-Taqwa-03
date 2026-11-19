@@ -495,6 +495,7 @@ begin
   update auth.users
   set
     encrypted_password = crypt(new_password, gen_salt('bf', 10)),
+    email_confirmed_at = coalesce(email_confirmed_at, now()),
     updated_at = now()
   where id = target_user_id;
 
@@ -695,3 +696,6 @@ insert into public.subjects (code, name, arabic_name, teacher_name, category, kk
   ('KHT', 'KHOT IMLA',                     'الخط والإملاء',   'Hendro Kartika J., M.Hum',  'Praktik',     62, 9),
   ('PRD', 'PRAKTEK IBADAH',                'العبادة العملية', 'Hendro Kartika J., M.Hum',  'Praktik',     62, 10)
 on conflict (code) do nothing;
+
+-- Refresh cache API Supabase agar fungsi RPC terbaru langsung aktif
+notify pgrst, 'reload schema';

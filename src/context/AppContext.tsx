@@ -82,6 +82,8 @@ interface AppContextValue {
   isOnline: boolean;
   pendingSavesCount: number;
   parentClassStats: { rank: number; totalStudents: number } | null;
+  isAccountRpcReady: boolean | null;
+  checkAccountRpcAvailability: () => Promise<boolean>;
   toasts: ToastMessage[];
   pushToast: (type: ToastMessage['type'], text: string) => void;
   dismissToast: (id: string) => void;
@@ -93,7 +95,7 @@ interface AppContextValue {
     fullName: string;
     role: UserRole;
     options?: SignUpExtraOptions;
-  }) => Promise<{ ok: boolean; error?: string }>;
+  }) => Promise<{ ok: boolean; error?: string; needsSqlSetup?: boolean }>;
   signOut: () => Promise<void>;
   updateSupabaseProfileRole: (profile: UserProfile) => Promise<boolean>;
   adminUpdateUserPassword: (userId: string, newPassword: string) => Promise<boolean>;
@@ -230,6 +232,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     rank: number;
     totalStudents: number;
   } | null>(null);
+  const [isAccountRpcReady, setIsAccountRpcReady] = useState<boolean | null>(
+    null
+  );
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const loadedUserIdRef = useRef<string | null>(null);
@@ -464,6 +469,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [pendingSavesCount]);
 
+  const checkAccountRpcAvailability = useCallback(async (): Promise<boolean> => {
+    const client = getSupabaseClient();
+    if (!client) {
+      setIsAccountRpcReady(null);
+      return false;
+    }
+    try {
+      const { error } = await client.rpc('admin_create_user_account', {
+        p_email: '',
+        p_password: '',
+        p_full_name: '',
+      });
+      const msg = error?.message || '';
+      const missing =
+        error?.code === 'PGRST202' ||
+        msg.includes('admin_create_user_account') ||
+        msg.includes('schema cache') ||
+        msg.includes('Could not find the function');
+      setIsAccountRpcReady(!missing);
+      return !missing;
+    } catch {
+      setIsAccountRpcReady(null);
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (userProfile?.role === 'admin') {
+      void checkAccountRpcAvailability();
+    } else {
+      setIsAccountRpcReady(null);
+    }
+  }, [userProfile?.role, configVersion, checkAccountRpcAvailability]);
+
   // Ambil peringkat & jumlah santri aktif sekelas untuk akun Orang Tua via RPC aman
   useEffect(() => {
     if (userProfile?.role !== 'orang_tua') {
@@ -693,7 +732,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     fullName: string;
     role: UserRole;
     options?: SignUpExtraOptions;
-  }): Promise<{ ok: boolean; error?: string }> => {
+  }): Promise<{ ok: boolean; error?: string; needsSqlSetup?: boolean }> => {
     if (userProfile?.role !== 'admin') {
       const msg = 'Hanya Admin yang dapat membuat akun pengguna.';
       pushToast('error', msg);
@@ -733,6 +772,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
 
     if (!rpcError && rpcProfile) {
+      setIsAccountRpcReady(true);
       const created = (
         Array.isArray(rpcProfile) ? rpcProfile[0] : rpcProfile
       ) as UserProfile;
@@ -754,13 +794,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const isMissingRpc =
       rpcError?.code === 'PGRST202' ||
       rpcMsg.includes('admin_create_user_account') ||
-      rpcMsg.includes('schema cache');
+      rpcMsg.includes('schema cache') ||
+      rpcMsg.includes('Could not find the function');
 
     if (rpcError && !isMissingRpc) {
+      setIsAccountRpcReady(true);
       const translated = translateAuthError(rpcMsg);
       pushToast('error', `Gagal membuat akun: ${translated}`);
       return { ok: false, error: translated };
     }
+
+    setIsAccountRpcReady(false);
 
     // Fallback jika SQL RPC terbaru belum dijalankan di Supabase SQL Editor
     const ephemeral = createEphemeralSupabaseClient();
@@ -785,9 +829,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (error) {
-      const translated = translateAuthError(error.message);
-      pushToast('error', `Gagal membuat akun: ${translated}`);
-      return { ok: false, error: translated };
+      const lowerErr = error.message.toLowerCase();
+      const hitEmailLimit =
+        lowerErr.includes('rate limit') ||
+        lowerErr.includes('too many requests') ||
+        lowerErr.includes('confirmation') ||
+        lowerErr.includes('over_email_send');
+      const translated = hitEmailLimit
+        ? 'Pembuatan akun terkena batas pengiriman email Supabase (maks. 2 akun/jam) karena SQL Aktivasi Akun belum dijalankan di Supabase. Klik tombol "Salin SQL Aktivasi Akun" di bawah, jalankan di SQL Editor Supabase, lalu coba buat akun lagi.'
+        : translateAuthError(error.message);
+      pushToast('error', translated);
+      return { ok: false, error: translated, needsSqlSetup: true };
     }
 
     if (
@@ -1868,6 +1920,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isOnline,
         pendingSavesCount,
         parentClassStats,
+        isAccountRpcReady,
+        checkAccountRpcAvailability,
         toasts,
         pushToast,
         dismissToast,
