@@ -1,0 +1,6 @@
+{
+  "name": "Raport MDTU At-Taqwa '03 Cibeureum",
+  "description": "Sistem Pengolahan Nilai Raport Madrasah Diniyah Takmiliyah Ula (MDTU) At-Taqwa '03 Cibeureum berbasis Supabase, Import/Export Excel, dan Cetak Raport PDF F4/A4.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
