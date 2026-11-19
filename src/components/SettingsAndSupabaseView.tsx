@@ -5,6 +5,7 @@ import {
   Download,
   Edit3,
   KeyRound,
+  Link2,
   LogOut,
   Plus,
   RefreshCw,
@@ -15,7 +16,10 @@ import {
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { ROLE_LABELS } from '../lib/rbac';
-import { testSupabaseConnection } from '../lib/supabase';
+import {
+  buildAutoConnectShareUrl,
+  testSupabaseConnection,
+} from '../lib/supabase';
 import type { UserProfile, UserRole } from '../types';
 import schemaSqlRaw from '../../supabase/schema.sql?raw';
 
@@ -68,6 +72,12 @@ export function SettingsAndSupabaseView() {
     message: string;
   } | null>(null);
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
+
+  useEffect(() => {
+    setUrlInput(supabaseUrl);
+    setKeyInput(supabaseAnonKey);
+  }, [supabaseUrl, supabaseAnonKey]);
 
   const totalBobot =
     Number(formSettings.bobot_formatif) +
@@ -801,7 +811,9 @@ export function SettingsAndSupabaseView() {
                 <p className="text-xs text-slate-500 mt-1">
                   Sumber aktif saat ini:{' '}
                   <span className="font-medium text-slate-800">
-                    {configSource === 'env'
+                    {configSource === 'server'
+                      ? 'Tersinkron Otomatis ke Semua Web Baru (Server & .env)'
+                      : configSource === 'env'
                       ? 'Variabel Lingkungan (.env / Hosting)'
                       : configSource === 'localStorage'
                       ? 'Konfigurasi Browser Tersimpan'
@@ -852,16 +864,16 @@ export function SettingsAndSupabaseView() {
               )}
 
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                {configSource === 'localStorage' && (
+                {(configSource === 'localStorage' || configSource === 'server') && (
                   <button
                     type="button"
-                    onClick={() => {
-                      resetSupabaseCredentials();
+                    onClick={async () => {
+                      await resetSupabaseCredentials();
                       setUrlInput('');
                       setKeyInput('');
                       setConnResult(null);
                     }}
-                    className="px-3 py-2 text-xs font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50"
+                    className="px-3 py-2 text-xs font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50 whitespace-nowrap"
                   >
                     Putuskan Koneksi
                   </button>
@@ -869,13 +881,49 @@ export function SettingsAndSupabaseView() {
                 <button
                   type="submit"
                   disabled={testingConn}
-                  className="ml-auto inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-60"
+                  className="ml-auto inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-60 whitespace-nowrap"
                 >
                   <KeyRound className="w-4 h-4" />
                   {testingConn ? 'Menguji...' : 'Uji & Simpan Koneksi'}
                 </button>
               </div>
             </form>
+
+            {urlInput && keyInput && (
+              <div className="pt-4 border-t border-slate-100 space-y-2.5">
+                <div className="text-xs text-slate-600 leading-relaxed">
+                  <strong>Koneksi Otomatis di Berbagai Web/Perangkat Baru:</strong>{' '}
+                  Saat Anda menyimpan koneksi di atas, server aplikasi otomatis menyimpannya sehingga siapa pun yang membuka alamat web ini dari browser atau HP baru langsung terhubung ke Supabase. Jika Anda menghosting frontend statis terpisah (tanpa server Node), bagikan tautan otomatis di bawah ini:
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const shareUrl = buildAutoConnectShareUrl(urlInput, keyInput);
+                    try {
+                      await navigator.clipboard.writeText(shareUrl);
+                      setCopiedShareLink(true);
+                      pushToast(
+                        'success',
+                        'Link akses web otomatis berhasil disalin ke clipboard.'
+                      );
+                      setTimeout(() => setCopiedShareLink(false), 2500);
+                    } catch {
+                      pushToast('error', 'Gagal menyalin link otomatis.');
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 whitespace-nowrap"
+                >
+                  {copiedShareLink ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-700" />
+                  ) : (
+                    <Link2 className="w-3.5 h-3.5" />
+                  )}
+                  {copiedShareLink
+                    ? 'Link Otomatis Tersalin'
+                    : 'Salin Link Akses Web Otomatis'}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Sesi Aktif & Inisialisasi Data MDTU */}

@@ -22,9 +22,13 @@ import {
 import {
   clearSupabaseConfig,
   createEphemeralSupabaseClient,
+  deleteServerSupabaseConfig,
+  fetchServerSupabaseConfig,
   getSupabaseClient,
   getSupabaseConfig,
+  saveServerSupabaseConfig,
   saveSupabaseConfig,
+  type SupabaseConfigSource,
 } from '../lib/supabase';
 import type {
   GradeRecord,
@@ -60,10 +64,11 @@ interface AppContextValue {
   setSelectedClassId: (id: string) => void;
 
   // Auth & Supabase Connection
+  configReady: boolean;
   isSupabaseConfigured: boolean;
   supabaseUrl: string;
   supabaseAnonKey: string;
-  configSource: 'env' | 'localStorage' | 'unconfigured';
+  configSource: SupabaseConfigSource;
   userProfile: UserProfile | null;
   supabaseProfiles: UserProfile[];
   authLoading: boolean;
@@ -84,7 +89,7 @@ interface AppContextValue {
   updateSupabaseProfileRole: (profile: UserProfile) => Promise<void>;
 
   updateSupabaseCredentials: (url: string, anonKey: string) => Promise<void>;
-  resetSupabaseCredentials: () => void;
+  resetSupabaseCredentials: () => Promise<void>;
   refreshFromSupabase: () => Promise<void>;
   initializeMdtuDataInSupabase: () => Promise<void>;
 
@@ -145,6 +150,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [supabaseProfiles, setSupabaseProfiles] = useState<UserProfile[]>([]);
 
   const [configVersion, setConfigVersion] = useState(0);
+  const [configReady, setConfigReady] = useState(false);
   const supabaseCfg = useMemo(() => {
     void configVersion;
     return getSupabaseConfig();
@@ -156,6 +162,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured);
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  // Sinkronisasi otomatis konfigurasi Supabase dari server (/api/supabase-config)
+  // sehingga setiap web/browser baru otomatis terhubung ke Supabase yang sama.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const serverRes = await fetchServerSupabaseConfig();
+      if (!active) return;
+      if (serverRes?.configured) {
+        setConfigVersion((v) => v + 1);
+      } else if (serverRes && !serverRes.configured) {
+        const current = getSupabaseConfig();
+        if (current.source === 'localStorage' && current.url && current.anonKey) {
+          const synced = await saveServerSupabaseConfig(current.url, current.anonKey);
+          if (active && synced.ok) {
+            setConfigVersion((v) => v + 1);
+          }
+        }
+      }
+      if (active) setConfigReady(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const pushToast = useCallback((type: ToastMessage['type'], text: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -516,17 +547,56 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateSupabaseCredentials = async (url: string, anonKey: string) => {
-    saveSupabaseConfig(url, anonKey);
-    setUserProfile(null);
+    const cleanUrl = url.trim().replace(/\/+$/, '');
+    const cleanKey = anonKey.trim();
+    const currentClient = getSupabaseClient();
+    const sessionRes = currentClient
+      ? await currentClient.auth.getSession()
+      : null;
+    const accessToken = sessionRes?.data.session?.access_token;
+
+    const serverRes = await saveServerSupabaseConfig(
+      cleanUrl,
+      cleanKey,
+      accessToken
+    );
+    if (!serverRes.ok && serverRes.message) {
+      pushToast('error', serverRes.message);
+      return;
+    }
+
+    const isSame =
+      supabaseCfg.url === cleanUrl && supabaseCfg.anonKey === cleanKey;
+    saveSupabaseConfig(cleanUrl, cleanKey);
+    if (!isSame) {
+      setUserProfile(null);
+    }
     setConfigVersion((v) => v + 1);
-    pushToast('success', 'Koneksi Supabase disimpan. Silakan masuk atau daftar akun.');
+    pushToast(
+      'success',
+      serverRes.ok
+        ? 'Koneksi Supabase aktif dan tersinkron otomatis untuk seluruh browser & web baru.'
+        : 'Koneksi Supabase tersimpan di browser ini. Gunakan Link Akses Web Otomatis untuk perangkat lain.'
+    );
   };
 
-  const resetSupabaseCredentials = () => {
+  const resetSupabaseCredentials = async () => {
+    const currentClient = getSupabaseClient();
+    const sessionRes = currentClient
+      ? await currentClient.auth.getSession()
+      : null;
+    const accessToken = sessionRes?.data.session?.access_token;
+
+    const serverRes = await deleteServerSupabaseConfig(accessToken);
+    if (!serverRes.ok && serverRes.message) {
+      pushToast('error', serverRes.message);
+      return;
+    }
+
     clearSupabaseConfig();
     setUserProfile(null);
     setConfigVersion((v) => v + 1);
-    pushToast('info', 'Konfigurasi Supabase pada browser telah dihapus.');
+    pushToast('info', 'Koneksi Supabase telah diputuskan.');
   };
 
   const initializeMdtuDataInSupabase = async () => {
@@ -1192,6 +1262,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         nonAcademics,
         selectedClassId,
         setSelectedClassId,
+        configReady,
         isSupabaseConfigured,
         supabaseUrl: supabaseCfg.url,
         supabaseAnonKey: supabaseCfg.anonKey,

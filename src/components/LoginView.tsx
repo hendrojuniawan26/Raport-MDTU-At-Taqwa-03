@@ -1,9 +1,11 @@
 import {
   AlertCircle,
   BookOpen,
+  Database,
   Eye,
   EyeOff,
   GraduationCap,
+  KeyRound,
   LogIn,
   ShieldCheck,
   UserCheck,
@@ -12,6 +14,7 @@ import {
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { ROLE_DESCRIPTIONS, ROLE_LABELS } from '../lib/rbac';
+import { testSupabaseConnection } from '../lib/supabase';
 import type { UserRole } from '../types';
 
 const ROLE_OPTIONS: {
@@ -42,7 +45,15 @@ const ROLE_OPTIONS: {
 ];
 
 export function LoginView() {
-  const { settings, isSupabaseConfigured, authLoading, signIn } = useApp();
+  const {
+    settings,
+    configReady,
+    isSupabaseConfigured,
+    authLoading,
+    signIn,
+    updateSupabaseCredentials,
+    pushToast,
+  } = useApp();
 
   const [logoError, setLogoError] = useState(false);
   const [selectedRoleHint, setSelectedRoleHint] = useState<UserRole>('admin');
@@ -52,9 +63,29 @@ export function LoginView() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
+  // First-time Admin Supabase setup (only visible when server & env are both unconfigured)
+  const [showInitialSetup, setShowInitialSetup] = useState(false);
+  const [setupUrl, setSetupUrl] = useState('');
+  const [setupKey, setSetupKey] = useState('');
+  const [connectingSetup, setConnectingSetup] = useState(false);
+
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await signIn(email, password);
+  };
+
+  const handleInitialSupabaseSetup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setConnectingSetup(true);
+    const check = await testSupabaseConnection(setupUrl, setupKey);
+    if (!check.ok) {
+      setConnectingSetup(false);
+      pushToast('error', check.message);
+      return;
+    }
+    await updateSupabaseCredentials(setupUrl, setupKey);
+    setConnectingSetup(false);
+    setShowInitialSetup(false);
   };
 
   return (
@@ -143,13 +174,78 @@ export function LoginView() {
               </p>
             </div>
 
-            {!isSupabaseConfigured && (
-              <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
-                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <div>
-                  Koneksi database Supabase belum terpasang pada environment aplikasi (<span className="font-mono">VITE_SUPABASE_URL</span> &amp; <span className="font-mono">VITE_SUPABASE_ANON_KEY</span>). Pengaturan koneksi Supabase dikelola oleh Admin Madrasah.
-                </div>
+            {!configReady ? (
+              <div className="flex items-center gap-2.5 p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600">
+                <Database className="w-4 h-4 text-emerald-700 shrink-0 animate-pulse" />
+                <span>Menyinkronkan koneksi Supabase madrasah secara otomatis...</span>
               </div>
+            ) : (
+              !isSupabaseConfigured && (
+                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed space-y-3">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                    <div className="space-y-2 flex-1">
+                      <p>
+                        Koneksi Supabase belum terpasang di server. Admin cukup menghubungkannya satu kali agar seluruh web/perangkat baru langsung terhubung otomatis.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowInitialSetup((v) => !v)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-950 bg-amber-200/70 hover:bg-amber-200 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                        {showInitialSetup
+                          ? 'Tutup Form Koneksi Awal'
+                          : 'Hubungkan Supabase Pertama Kali (Admin)'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {showInitialSetup && (
+                    <form
+                      onSubmit={handleInitialSupabaseSetup}
+                      className="pt-3 border-t border-amber-200/80 space-y-2.5"
+                    >
+                      <div>
+                        <label className="block text-[11px] font-medium text-amber-950 mb-1">
+                          Project URL Supabase (VITE_SUPABASE_URL)
+                        </label>
+                        <input
+                          type="url"
+                          required
+                          placeholder="https://xyzcompany.supabase.co"
+                          value={setupUrl}
+                          onChange={(e) => setSetupUrl(e.target.value)}
+                          className="w-full px-3 py-2 text-xs bg-white border border-amber-300 rounded-lg font-mono text-slate-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-amber-950 mb-1">
+                          Anon Public Key (VITE_SUPABASE_ANON_KEY)
+                        </label>
+                        <textarea
+                          rows={2}
+                          required
+                          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                          value={setupKey}
+                          onChange={(e) => setSetupKey(e.target.value)}
+                          className="w-full px-3 py-2 text-xs bg-white border border-amber-300 rounded-lg font-mono text-slate-900"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={connectingSetup}
+                        className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-800 rounded-lg hover:bg-emerald-900 disabled:opacity-60"
+                      >
+                        <Database className="w-3.5 h-3.5" />
+                        {connectingSetup
+                          ? 'Menghubungkan...'
+                          : 'Uji & Aktifkan Otomatis untuk Semua Web'}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )
             )}
 
             <form onSubmit={handleLoginSubmit} className="space-y-4">
